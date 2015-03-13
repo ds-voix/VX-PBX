@@ -1,2 +1,2 @@
 # VX-PBX
-Very eXtendable PBX sources by VOIX ltd. @ vo-ix.ru.
+Very eXtendable PBX sources by VOIX, Ltd. @ vo-ix.ru.
