@@ -1,0 +1,725 @@
+#!/usr/bin/perl
+
+# UPSERT v0.9 configuration language translator for VX-PBX platform
+# Copyright (C) 2014-2015 Dmitry Svyatogorov ds@vo-ix.ru
+
+#    This program is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU Affero General Public License as
+#    published by the Free Software Foundation, either version 3 of the
+#    License, or (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU Affero General Public License for more details.
+#
+#    You should have received a copy of the GNU Affero General Public License
+#    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+# :TODO: Must validate config against dictionary - throw out hardcoding!!!
+# :TODO: Add support for the rest half of PBX objects
+
+use strict;
+
+use Encode; # UTF-8 strings support
+use Text::CharWidth qw(mbwidth mbswidth mblen);
+
+use Number::Format qw(:subs :vars);
+my $bf = new Number::Format(-thousands_sep   => ' ',
+                            -decimal_point   => ',');
+
+use IO::File;     # File IO, part of core
+use File::Basename;
+#use Getopt::Std;  # command line option processing
+use Getopt::Long qw(:config no_ignore_case bundling_override);
+use Fcntl qw(:DEFAULT :flock);  # for file locking
+use POSIX qw(strftime);         # pretty date formatting
+use Time::Local;                # to do reverse of gmtime()
+#use Data::Dumper qw(Dumper);
+
+my %OBJECTS = ();               # All objects in config
+my ($Section, $Description);    # [Func "YeaStar","8125961939","8123381233","8123387788","8123387799" "ALL"] ; some description
+my $Order;                      # For sorted lists
+my %Fields = ();                # Field->Value as hash
+my %DEFAULT = ();               # Field->Value defaults
+my ($key, $value);
+my $NestedKey1;
+my $DROP;
+
+my @files;
+my $LINE; # Current line in config
+
+my ($BIND, $OldBind);
+
+my ($BindSource, $conf, $debug, $insert, $delete, $purge, $exec, $tran, $clean, $help);
+my $res = GetOptions ("c|conf=s" => \$conf,
+                      "b|bind=s" => \$BindSource,   # M.b. although  ".dir", ".conf" or '.var'
+                      "d|debug" => \$debug,   # Debug output to STDERR
+                      "I|insert" => \$insert, # Produse INSERT code only
+                      "D|delete" => \$delete, # Produse DELETE before INSERT
+                      "P|purge" => \$purge,   # DELETE all specified objects
+                      "S|sql" => \$exec,      # Allow to execute plain SQL from [SQL] -- !!!superuser!!!
+                      "T|tran" => \$tran,     # Wrap SQL into transaction
+                      "C|clean" => \$clean,   # Produce clean code for "orphans"
+                      "h|?|help" => \$help);
+
+if ($help) {
+ print "UPSERT configuration language translator for VX-PBX platform
+ usage: $0 [-c /path/to/config] [-d] [-I] [-D] [-S] [-T] [-C] [-h]
+  -c|--conf: the path to config file|directory
+             read config from STDIN when ommited
+  -b|--bind: PBX vitr.office \"BIND\" or where to get it from
+             \".dir\": BIND := `dirname`
+             \".conf\": BIND := `basename`
+             \".var\": get BIND from config body
+  -d|--debug: Turns debug output to STDERR on
+  -I|--insert: Produse INSERT code instead of \"upserts\"
+  -D|--delete: Produse DELETE before INSERT
+  -S|--sql: Allow to execute plain SQL from [SQL] -- !!!Completelly insecure!!!
+  -T|--tran: Wrap produced SQL into transaction
+  -C|--clean: Produce clean code for \"orphans\" !!!Beware!!!
+  -h|-?|--help: Show this help and exit
+";
+ exit;
+}
+
+print "BEGIN TRANSACTION;\n" if ($tran);
+
+if ($conf ne '') { # Open config file or STDIN for input
+ if (-d "$conf") {
+  use File::Find;
+  find(sub { push(@files, $File::Find::name) }, "$conf");
+ } else {
+  @files = glob "$conf"; # May be directory or some wildcard
+ }
+
+ foreach $conf (@files) {
+# print "$conf\n";
+#  $conf = unquote($conf);
+  next unless (-f $conf);
+  unless (open(CONF, '<', "$conf")) {
+   print STDERR "Unable to open file \"$conf\".  Error: $!\n";
+   exit 1;
+  }
+  my $fd = fileno CONF;
+  if ($BindSource eq '.dir') { # Get BIND from base directory name, unless "/pbx/conf/"
+   $BIND = basename(dirname(readlink("/proc/$$/fd/$fd")));
+  }
+  if ($BindSource eq '.conf' | $BIND eq 'conf') { # Get BIND from file name
+   $BIND = basename(readlink("/proc/$$/fd/$fd"));
+   $BIND =~ s/\..+?$//;   # Strip .suffix, the rest is BIND
+  }
+  $BIND //= $BindSource unless $BindSource eq '.var';
+
+  $OldBind = $BIND if ($OldBind eq '');
+  if ($OldBind ne $BIND) {
+   Clean() if ($clean);
+   %OBJECTS = ();
+   $OldBind = $BIND;
+  }
+  Config() if (tell(CONF) != -1);
+  close(CONF);
+ }
+} else {
+ $BIND = $BindSource unless $BindSource eq '.var';
+ open(CONF, '<-');
+ if (tell(CONF) != -1) {
+  Config();
+ }
+}
+
+Clean() if ($clean);
+
+print "\nCOMMIT TRANSACTION;\n" if ($tran);
+exit;
+#############################################################################
+
+# Clean unused
+sub Clean {
+ print "-- CLEAN --\n";
+ my ($sql, $and, $skip, $bind);
+ print "\n";
+
+ foreach my $k1 (%OBJECTS) {
+  if (ref($k1) eq 'HASH') {
+   foreach my $k2 (%$k1) {
+    if ($k2 =~ m/^"/) {
+     unless ($k2 eq '"BIND"') {
+      $sql .= "AND " if ($and);
+      $sql .= "NOT( " unless ($and);
+      $sql .= "($k2 IN(";
+      $skip = 0;
+      $and = 1;
+     } else {
+#      $sql .= "(\"BIND\"='$BIND') ";
+      $skip = 1;
+     }
+    } else {
+     $k2 =~ s/^,//;
+     if ($skip) {
+      $bind = $k2;
+      $bind =~ s/,'.+$//;
+      $bind =~ s/,NULL.*$//;
+     } else {
+      $sql .= "$k2)) ";
+     }
+    }
+   }
+  } else {
+   unless ("$bind" eq '' | "$bind" eq "'REDIRECT'") {
+    $sql .= ") AND " if ($and);
+    if ("$bind" ne "NULL") {
+     $sql .= "(\"BIND\"=$bind) ";
+    } else {
+     $sql .= "(\"BIND\" is NULL) ";
+    }
+    print "$sql;\n";
+   }
+   $sql = "SELECT * FROM \"$k1\" WHERE ";
+   $and = 0;
+   $bind = '';
+  }
+ }
+ unless ("$bind" eq '' | "$bind" eq "'REDIRECT'") {
+  $sql .= ") AND " if ($and);
+  if ("$bind" ne "NULL") {
+   $sql .= "(\"BIND\"=$bind) ";
+  } else {
+   $sql .= "(\"BIND\" is NULL) ";
+  }
+  print "$sql;\n";
+ }
+}
+
+sub Config {
+ ($Section, $Description) = ();
+ $Order = undef;
+ %Fields = ();
+ %DEFAULT = ();
+ ($key, $value) = ();
+ $NestedKey1 = undef;
+ $DROP = undef;
+ $LINE = 0;
+
+ foreach (<CONF>) { # Process config file
+  $LINE++;
+  $_ = trim($_);
+  next if (/^;[^;]|^#[^#]|^$/);
+
+#  if (/^[\s\t]*\[[^\]]+\]/p) { # e.g. /[Func "YeaStar","8125961939","8123381233","8123387788","8123387799" "ALL"] ;some ; [description]/
+  if (/^[\s\t]*\[([^\]'"]+|(["][^"]+["])|(['][^']+[']))+\]/p) {
+#   $DROP = 1 if $purge;
+   if ($Section ne '') { # Process previous section
+    Process($Section, $Description, \%Fields);
+   }
+
+   $Section = ${^MATCH};
+   $Description = ${^POSTMATCH};
+
+   $Section =~ s/^\[//;
+   $Section =~ s/\]$//;
+
+   $Description =~ s/^.*?[#;]//; # Not greedily match to get "some ; description"
+   debug("$Section == $Description");
+   %Fields = (); # Empty fields at new section
+  } else { # Add Field->Value
+   if (/^\[\]/p) { # Lists
+    if (%Fields) {
+     Process($Section, $Description, \%Fields);
+     %Fields = (); # Empty fields at new section
+    }
+    $Description = ${^POSTMATCH};
+    $Description =~ s/^.*?[#;]//; # Not greedily match to get "some ; description"
+   }
+   if (/^[\s\t]*--[\s\t]*\[.+\]/p) { # Delete record
+    if (%Fields | $DROP) {
+     Process($Section, $Description, \%Fields);
+     %Fields = (); # Empty fields at new section
+    }
+    $Section = ${^MATCH};
+    $Description = ${^POSTMATCH};
+
+    $Section =~ s/^[\s\t]*--[\s\t]*\[//;
+    $Section =~ s/\]$//;
+
+    $Description =~ s/^.*?[#;]//; # Not greedily match to get "some ; description"
+    debug("\n-DEL- [$Section]");
+    $DROP = 1;
+   }
+
+   if ("$Section" eq "SQL" && $exec) {
+    print "$_\n" unless ($DROP);
+    next;
+   }
+   if (/^[^#;].+?=/p) {
+    $key = ${^MATCH};
+    $value = ${^POSTMATCH};
+
+    if ($value =~ m/^\s*((["][^"]*["])|(['][^']*['])|([^"';]+))+/p) {
+     $value = ${^MATCH};
+    }
+    $value = trim($value);
+
+
+    $key =~ s/=$//;
+    $key = unquote(trim($key));
+
+    if ("$key" eq 'BIND' & $Section eq '') {
+     if ("$BindSource" eq '.var') {
+      $BIND = $value;
+     } else {next;}
+    }
+    $Fields{$key} = $value;
+   }
+  }
+ }
+
+ if ($Section ne '') { # Process last section
+  Process($Section, $Description, \%Fields);
+ }
+} # sub Config
+
+sub Process($)
+{
+ $DROP = 1 if $purge;
+ my $_ = shift; # String
+ my $Description = shift; # String
+ $Description = trim($Description);
+
+ my $f = shift; # Hash reference
+ my %Fields = %{$f};
+
+ my ($Table, $Key1, $Key2, $List);
+ my (@Keys, @Values, $LIST);
+
+ if (/(^[\s\t]*[^'"\s\t]+)|^[\s\t"]+([^"]|\\\")+[\s\t]*[^\\]["]+|^[\s\t']+([^']|\\\')+[\s\t]*[^\\][']+/p) {
+  $Table = unquote(trim(${^MATCH}));
+  $Key1 = ${^POSTMATCH};
+  if ($Key1 =~ m/^\s*(((["][^"]*["])|(['][^']*['])|([^"'\s\t,]+))(\s*,\s*)?)+/p) {
+   $Key2 = trim(${^POSTMATCH});
+   $Key1 = trim(${^MATCH});
+   if ($Key1 =~ m/,\s*$/) {
+    print "ROLLBACK TRANSACTION\n" if ($tran);
+    print STDERR "Error: unmatched quote in line\n";
+    print STDERR "$_\n";
+    exit(-1);
+   }
+  }
+  $Key1 = $NestedKey1 if ($Key1 eq '');  # Reduce lists
+ }
+
+ $BIND = 'NULL' if ($BIND eq '');
+ $NestedKey1 = $Key1;
+
+ use Switch 'Perl6';
+ given ($Table) {
+  when "DEFAULT" { @DEFAULT{keys %Fields} = values %Fields; return }  # Set defaults e.g. Exten.CallLimit=3   # %DEFAULT = %Fields;
+  when "SQL" { return }  # !!!Bypass unparsed SQL!!!
+  when "queues" { @Keys = ("BIND","name"); @Values = ($BIND,$Key1) }
+  when "queue_members" { @Keys = 'queue_name'; @Values = $Key1; $LIST = 1 }
+  when "sip" { @Keys = ("BIND","name"); @Values = ($BIND,$Key1) }  # !!! BEWARE! Completelly insecure !!!
+  when "voicemail" { @Keys = ("context","mailbox"); @Values = ($BIND,$Key1) }
+  when "CONST" { @Keys = ("BIND","Name"); @Values = ($BIND,$Key1); $f->{'Description'} = $Description unless ($f->{'Description'}) }
+  when "Channels" { @Keys = ("BIND","NRec"); @Values = ($BIND,$Key1); $f->{'Description'} = $Description unless ($f->{'Description'}) }
+  when "Mangle" { @Keys = ("BIND","NRec"); @Values = ($BIND,$Key1); $f->{'Description'} = $Description unless ($f->{'Description'}) }
+  when "Aliases" {@Keys = ("BIND","Cell","Exten"); @Values = ($BIND,$Key1,$Key2 eq ''?'GLOBAL':$Key2); $f->{'Description'} = $Description unless ($f->{'Description'}) }
+  when "Func" {@Keys = ("BIND","Exten","CID"); @Values = ($BIND,$Key1,$Key2 eq ''?'ALL':$Key2); $f->{'Description'} = $Description unless ($f->{'Description'}) }
+  when "Exten" { @Keys = ("BIND","Exten"); @Values = ($BIND,$Key1); $f->{'Description'} = $Description unless ($f->{'Description'}) }
+  when "Event" { @Keys = ("BIND","Line"); @Values = ($BIND,$Key1); $f->{'Description'} = $Description unless ($f->{'Description'}) }
+  when "Friends" { @Keys = ("BIND","FromExten","ToExten"); @Values = ($BIND,$Key1); $f->{'Description'} = $Description unless ($f->{'Description'}) } # Parse "123 - 456" into key pair
+  when "CID" { @Keys = ("BIND","FromExten","ToExten"); @Values = ($BIND,$Key1); $f->{'Description'} = $Description unless ($f->{'Description'}) } # Parse "123 - 456" into key pair
+  when "Route" { @Keys = ("BIND","NRec"); @Values = ($BIND,$Key1); $f->{'Description'} = $Description unless ($f->{'Description'}) } # Parse "123 - 456" into key pair
+  when "ACL" { @Keys = ("BIND","NRec"); @Values = ($BIND,$Key1); $f->{'Description'} = $Description unless ($f->{'Description'}) }
+  when "ACLines" { @Keys = 'ACL'; @Values = $Key1; $LIST = 1; $f->{'Description'} = $Description unless ($f->{'Description'}) }
+  when "ACRegex" { @Keys = 'ACL'; @Values = $Key1; $LIST = 1; $f->{'Description'} = $Description unless ($f->{'Description'}) }
+  when "Schedule" { @Keys = ("BIND","NRec"); @Values = ($BIND,$Key1); $f->{'Description'} = $Description unless ($f->{'Description'}) }
+  when "Schedules" { @Keys = 'Schedule'; @Values = $Key1; $LIST = 1; $f->{'Description'} = $Description unless ($f->{'Description'}) }
+  when "PrefixList" { @Keys = ("BIND","NRec"); @Values = ($BIND,$Key1); $f->{'Description'} = $Description unless ($f->{'Description'}) }
+  when "Prefixes" { @Keys = 'PrefixList'; @Values = $Key1; $LIST = 1; $f->{'Description'} = $Description unless ($f->{'Description'}) }
+  when "CallList" { @Keys = ("BIND","NRec"); @Values = ($BIND,$Key1); $f->{'Description'} = $Description unless ($f->{'Description'}); $Order = 0 }
+  when "Calls" { @Keys = 'CallList'; @Values = $Key1; $LIST = 1; $f->{'Description'} = $Description unless ($f->{'Description'}); $f->{'Order'} = $Order++ unless ($f->{'Order'}) }
+  when "Menu" { @Keys = ("BIND","NRec"); @Values = ($BIND,$Key1); $f->{'Description'} = $Description unless ($f->{'Description'}) }
+
+  when "CallBack" {
+   @Keys = ("BIND","Exten","CID");
+   @Values = ($BIND,$Key1,$Key2);
+#   $f->{'Description'} //= $Description;   # Makes perl creasy 8()
+   $f->{'Description'} = $Description unless ($f->{'Description'});
+  }
+
+  default {
+   print "ROLLBACK TRANSACTION\n" if ($tran);
+   print STDERR "Error: unknown table \"$Table\"\n";
+   exit(-1);
+  }
+ }
+
+ delete $f->{'Description'} if ($f->{'Description'} eq '');
+
+ SQL($Table,$f,\@Keys,\@Values,$LIST);
+
+ # Preprocess for List items
+ given ($Table) {
+  when "queues" { $List = 'queue_members'; @Keys = 'queue_name'; @Values = $Key1; }
+  when "ACL" { $List = 'ACLines'; @Keys = 'ACL'; @Values = $Key1; }
+  when "Schedule" { $List = 'Schedules'; @Keys = 'Schedule'; @Values = $Key1; }
+  when "PrefixList" { $List = 'Prefixes'; @Keys = 'PrefixList'; @Values = $Key1; }
+  when "CallList" { $List = 'Calls'; @Keys = 'CallList'; @Values = $Key1; }
+  default { return; }
+ }
+ $DROP = 1; SQL($List,$f,\@Keys,\@Values);
+
+ if ($Table eq 'ACL') { # ACL << (ACLines, ACRegex)
+  $List = 'ACRegex'; @Keys = 'ACL'; @Values = $Key1;
+  $DROP = 1; SQL($List,$f,\@Keys,\@Values);
+ }
+
+ return;
+}
+
+sub SQL($)
+{
+ my $Table=shift;
+
+ my $f = shift; # Hash reference
+ my %Fields = %{$f};
+
+ my $k = shift;
+ my @Keys = @{$k};
+
+ my $v = shift;
+ my @Values = @{$v};
+
+ my $LIST = shift;
+
+ my ($string, $match, $num);
+
+ my @KV; # Expand key values
+
+ debug("\n[$Table]");
+
+ for (my $i = 0; $i < scalar(@Keys); $i++) {
+  # Lists: "YeaStar","8125961939", 8123381233,"8123387788","812 3387799",123
+  $string = @Values[$i];
+  $num = 0;
+  while ($string =~ m/^\s*(((["][^"]*["])|(['][^']*['])|([^"'\s\t,]+))(\s*,\s*)?)/p) {
+   $match = trim(${^MATCH});
+   $string = trim(${^POSTMATCH});
+   $match =~ s/,$//;
+   $match = unquote($match);
+   if ($match =~ m/^.*[^\.]\.\.[^\.].*$/p) { # Iterator: "201a .. 205a" or "3225200#200..3225200#202"
+    $match =~ m/^.*[^\.]\.\./p;
+    my $r1 = trim(${^MATCH});
+    my $r2 = trim(${^POSTMATCH});
+    $r1 =~ s/\.+$//;
+
+    my ($prefix, $suffix) = ('', '');
+    my ($from, $to) = ('', '');
+    my $pos = 0;
+    my $mask = $r1 ^ $r2;
+
+    for (my $i = 0; $i < length($mask); $i++) {
+     my $s = substr($mask,$i,1);
+     if ($s =~ /[\0]/) {
+      $pos = 2 if ($pos == 1);
+      $prefix .= substr($r1,$i,1) if ($pos == 0);
+      $suffix .= substr($r1,$i,1) if ($pos == 2);
+     } else {
+      $pos = 1 if ($pos == 0);
+      if ($pos > 1) { # Too many samlpes
+       print "ROLLBACK TRANSACTION\n" if ($tran);
+       print STDERR "Error: Mor then 1 sample for iteration for $r1 .. $r2\n";
+       exit 1;
+      }
+      $from .= substr($r1,$i,1);
+      $to .= substr($r2,$i,1);
+     }
+
+    }
+
+    if (length($from) == 1 && length ($to) == 1) { # Allow iterators like "a..z"
+     $from = ord($from);
+     $to = ord($to);
+
+     if ($to < $from) {
+      print "ROLLBACK TRANSACTION\n" if ($tran);
+      print STDERR "Error: Descending range $from .. $to at line #$LINE\n";
+      exit 1;
+     }
+     if ($to - $from > 100) {
+      print "ROLLBACK TRANSACTION\n" if ($tran);
+      print STDERR "Error: Too many items for $from .. $to at line #$LINE\n";
+      exit 1;
+     }
+
+     for (my $j = $from; $j <= $to; $j++) {
+      $KV[$i][$num] = $prefix . chr($j) . $suffix;
+      $num++;
+     }
+
+    } else { # Integer iterators
+     unless ("$from$to" =~ m/^\d+$/) {
+      print "ROLLBACK TRANSACTION\n" if ($tran);
+      print STDERR "Error: Non-integer range $from .. $to at line #$LINE\n";
+      exit 1;
+     }
+
+     if ($to < $from) {
+      print "ROLLBACK TRANSACTION\n" if ($tran);
+      print STDERR "Error: Descending range $from .. $to at line #$LINE\n";
+      exit 1;
+     }
+     if ($to - $from > 100) {
+      print "ROLLBACK TRANSACTION\n" if ($tran);
+      print STDERR "Error: Too many items for $from .. $to at line #$LINE\n";
+      exit 1;
+     }
+     my $pad = '%0' . length($to) . 'd';
+     for (my $j = $from; $j <= $to; $j++) {
+      $KV[$i][$num] = $prefix . sprintf($pad, $j) . $suffix;
+      $num++;
+     }
+    }
+   } else {
+    $KV[$i][$num] = $match;
+    $num++;
+   }
+  }
+  debug("* @Keys[$i] = @Values[$i]");
+ }
+
+ for my $key (keys %DEFAULT) {
+  if ($key =~ m/^$Table\./p) {
+   my $field = ${^POSTMATCH};
+   if ($f->{$field} eq '') {
+    debug("DEFAULT ${^POSTMATCH} := ". $DEFAULT{$key});
+    $f->{$field} = $DEFAULT{$key} if ($DEFAULT{$key} ne '') ;
+   }
+  }
+ }
+
+ for my $key (sort keys %Fields) {
+  debug("$key := $f->{$key}");
+ }
+
+ # Max 3 key levels (BIND - Exten - CID), so no recursion
+ my $key1 = @KV[0];
+ my $key2 = @KV[1];
+ my $key3 = @KV[2];
+
+ unless (defined(@$key1)) {
+  print STDERR "Undefined key for [$Table] at line #$LINE\n";
+  exit 1;
+ }
+
+ foreach my $k1 (sort @$key1) {
+  if (@KV[1]) {
+   foreach my $k2 (sort @$key2) {
+    if (@KV[2]) {
+     foreach my $k3 (sort @$key3) {
+      upsert($Table, $LIST, $f, $k, $k1, $k2, $k3);
+     }
+    } else {upsert($Table, $LIST, $f, $k, $k1, $k2);}
+   }
+  } else {upsert($Table, $LIST, $f, $k, $k1);}
+ }
+
+ $DROP = 0;
+ return;
+}
+
+sub upsert($)
+{
+ my $Table=shift;
+ my $LIST=shift;
+
+ my $f = shift; # Hash reference
+ my %Fields = %{$f};
+ my %SIP;       # SIP extra for Extensions
+
+ my $k = shift;
+ my @Keys = @{$k};
+
+ my $k1 = shift;
+ $k1 = trim($k1);
+ my $k2 = shift;
+ $k2 = trim($k2);
+ my $k3 = shift;
+ $k3 = trim($k3);
+
+ my $sql;
+
+ # Ranges: "8123388800 - 8123388899"
+ if (@Keys[2] && ($k3 == '') && ($k2 =~ m/^[\s\t]*[\d]+[\s\t-]+[\d]+[\s\t]*$/p)) {
+  $k2 =~ m/([\d]+[\s\t-]+)/p;
+  $k2 = trim(${^MATCH});
+  $k3 = trim(${^POSTMATCH});
+  $k2 =~ s/[\s\t-]+$//;
+ }
+ if (@Keys[1] && ($k2 == '') && ($k1 =~ m/^[\s\t]*[\d]+[\s\t-]+[\d]+[\s\t]*$/p)) {
+  $k1 =~ m/([\d]+[\s\t-]+)/p;
+  $k1 = trim(${^MATCH});
+  $k2 = trim(${^POSTMATCH});
+  $k1 =~ s/[\s\t-]+$//;
+ }
+
+ if ($Table eq "CallBack") { # Native format is inadequate complex
+  $Fields{'Extension'} //= $k2;
+  $Fields{'CallBack'} //= $k3;
+  $Fields{'CallerID'} //= $Fields{'Extension'};
+  $Fields{'Channel'} //= 'LOCAL/'.$Fields{'Extension'}.'-'.$Fields{'CallBack'}.'@out';
+  delete $Fields{'CallBack'};
+ }
+
+ my ($SET, $SET_KEYS, $FIELDS, $VALUES);
+
+ $SET_KEYS = quote_identifier(@Keys[0]) . (quote($k1) ne 'NULL'?"=":' is ') . quote($k1);
+ $FIELDS = quote_identifier(@Keys[0]);
+ $VALUES = quote($k1);
+ $OBJECTS{$Table}{quote_identifier(@Keys[0])} .= ',' . quote($k1) unless ($LIST|$DROP);
+ if (@Keys[1]) {
+  $SET_KEYS .= " AND " . quote_identifier(@Keys[1]) . (quote($k2) ne 'NULL'?"=":' is ') . quote($k2);
+  $FIELDS .= "," . quote_identifier(@Keys[1]);
+  $VALUES .= "," . quote($k2);
+  $OBJECTS{$Table}{quote_identifier(@Keys[1])} .= ',' . quote($k2) unless ($LIST|$DROP);
+ }
+ if (@Keys[2]) {
+  $SET_KEYS .= " AND " . quote_identifier(@Keys[2]) . (quote($k3) ne 'NULL'?"=":' is ') . quote($k3);
+  $FIELDS .= "," . quote_identifier(@Keys[2]);
+  $VALUES .= "," . quote($k3);
+  $OBJECTS{$Table}{quote_identifier(@Keys[2])} .= ',' . quote($k3) unless ($LIST|$DROP);
+ }
+
+ my $var = $k2 ne '' ?$k2:$k1;
+ for my $key (sort keys %Fields) {
+  if ($key =~ m/^\(.+\)$/) { # Field list to assign the same value | comma separated values
+   my $val = $Fields{$key}; # Values may be comma-separated list as well
+   while ($val =~ m/^(\s*(((["][^"]*["])|(['][^']*['])|([^"'\s\t,]+))\s*)+(,|$))/p) {
+    my $match = trim(${^MATCH});
+    $val = trim(${^POSTMATCH});
+    $match =~ s/,$//;
+    my $value = unquote($match);
+
+    my $key1 = $key;
+    $key1 =~ s/\(|\)//g;
+    while ($key1 =~ m/^\s*(((["][^"]*["])|(['][^']*['])|([^"'\s\t,]+))(\s*,\s*)?)/p) {
+     $match = trim(${^MATCH});
+     $key1 = trim(${^POSTMATCH});
+     $match =~ s/,$//;
+     $match = unquote($match);
+     $Fields{$match} = $value;
+    }
+    delete %Fields->{$key};
+    print $Fields{$key};
+    upsert($Table, $LIST, \%Fields, \@Keys, $k1, $k2, $k3);
+   }
+   return;
+  }
+
+  if ($Table == 'Exten' & $key =~ m/^sip\./p) { # SIP extra settings
+   $SIP{ ${^POSTMATCH} } = $Fields{$key};
+  } else {
+#   print "$key == $Fields{$key}\n";
+   $Fields{$key} =~ s/(?<![\$\\])\$\$(?!\$)/$var/g; # Replace $$ to key
+
+   if ($Fields{$key} =~ m/^[~]/) {
+    $Fields{$key} =~ s/^[~]//;
+    $Fields{$key} =~ m/^\s*(((["][^"]*["])|(['][^']*['])|([^"'\s\t,]+))(\s*,\s*)?)+/p;
+    $_ = unquote(trim(${^MATCH}));
+    my $oper = unquote(trim(${^POSTMATCH}));
+    eval(eval($oper));
+    $Fields{$key} = $_;
+   }
+
+   $Fields{$key} = unquote($Fields{$key});
+   $SET .= "," . quote_identifier($key) . '=' . quote($Fields{$key});
+   $FIELDS .= "," . quote_identifier($key);
+   $VALUES .= "," . quote($Fields{$key});
+  }
+ }
+ $SET =~ s/^,//;
+
+ print "\n";
+ print "-- SECTION [$Section] ; $Description\n"  if $debug;
+ unless ($DROP) {
+  if ($insert|$LIST) {
+   $sql = "INSERT INTO \"$Table\" ($FIELDS) VALUES ($VALUES);";
+  } else {
+  # As for 8.4 PostgreSQL may nothing in MERGE|UPSERT :/~
+  $sql = "INSERT INTO \"$Table\" ($FIELDS) SELECT $VALUES WHERE NOT EXISTS (SELECT * FROM \"$Table\" WHERE $SET_KEYS);";
+  $sql .= "\nUPDATE \"$Table\" SET $SET WHERE $SET_KEYS;" if ($SET);
+  }
+  print "DELETE FROM \"$Table\" WHERE $SET_KEYS;\n" if ($delete && $insert && !$LIST);
+ } else {
+  print "DELETE FROM \"$Table\" WHERE $SET_KEYS;";
+#  $DROP = 0 unless (%SIP);
+ }
+
+ print "$sql\n";
+
+ if (%SIP) { # !!!Restrict privilege escalation!!!
+  @Keys = ('BIND','name');
+  my $name = ($k1 ne 'NULL')?"$k1+$k2":$k2;
+
+  $SIP{'defaultuser'} = $name;
+  debug("\n[&SIP \"$name\"]");
+  if ($SIP{'callerid'} ne '') {
+   $SIP{'callerid'} =~ s/<.+$//g;
+   $SIP{'callerid'} =~ s/[^\d\w\s.-]//g;
+   my $cid = $k2;
+   $cid =~ s/[^\d]//g;
+   if ($cid ne '') {
+    $SIP{'callerid'} = '"' . $SIP{'callerid'} . "\"<$cid>";
+   } else {
+    delete $SIP{'callerid'};
+   }
+  }
+  delete $SIP{'accountcode'};
+  delete $SIP{'context'};
+  delete $SIP{'setvar'};
+  $SIP{'qualify'} = 'yes' unless ($SIP{'qualify'});
+  $SIP{'description'} = $Fields{'Description'} if ($SIP{'description'} eq '');
+  upsert('sip', $LIST, \%SIP, \@Keys, $BIND, $name);
+ }
+ return;
+}
+
+#############################################################################
+sub trim($) # Trim spaces
+{
+ my $string = shift;
+ $string =~ s/^[\s\t]+//;
+ $string =~ s/[\s\t]+$//;
+ return $string;
+}
+
+sub unquote($)
+{
+ my $string = shift;
+
+ while ($string =~ m/^"(.*)"$|^'(.*)'$/) { # Trim matching quotes
+  $string =~ s/^"(.*)"$/\1/;
+  $string =~ s/^'(.*)'$/\1/;
+ }
+ return $string;
+}
+
+sub quote { # http://cpansearch.perl.org/src/TIMB/DBI-1.632/DBI.pm
+ my $string = shift;
+ return "NULL" unless defined $string;
+ return "NULL" if ($string eq 'NULL');
+ $string =~ s/'/''/g;		# ISO SQL2
+ return "'$string'";
+}
+
+sub quote_identifier {
+ my $string = shift;
+ $string =~ s/"/""/g;
+ return "\"$string\"";
+}
+
+sub debug {
+ return unless ($debug);
+ my $string = shift;
+ print STDERR $string . "\n" unless ($DROP);
+}

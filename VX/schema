@@ -1,0 +1,403 @@
+#!/usr/bin/perl
+
+# VX v0.5 block-schema definition language translator for VX-PBX platform
+# Copyright (C) 2014-2015 Dmitry Svyatogorov ds@vo-ix.ru
+
+#    This program is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU Affero General Public License as
+#    published by the Free Software Foundation, either version 3 of the
+#    License, or (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU Affero General Public License for more details.
+#
+#    You should have received a copy of the GNU Affero General Public License
+#    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+use strict;
+use Cwd qw(abs_path cwd);
+use lib abs_path($0).".d";
+
+our $REDUCE = 's/^(\+7|[78])?812([\d]{7})$/$2/';
+
+our ($DID, $BIND); # Full DID and BIND
+our $did; # Reduced DID
+our $SUFFIX = ''; # Short suffix for current OBJECT like '.M' for menu or '.S' for schedule
+our $LABEL = ''; # Label of current object
+our %LABELS = (); # {"$OBJECT.$LABEL"} = "$OI[.$oi]" ## "queue 9583253" >> $::LABELS{"QUEUE.9583253"} = "2.1"
+our %OI = (); # {"$OBJECT"} = $iterator ## per-object iterators $::OI{"MENU"}++
+our $oi; # Iterate inside current object $::oi++
+our %Fields = (); # Field->Value, may be filled from inline actions like "queue 9583253", to invoke object creator
+our $OBJECT; # Current object may be needed to retrieve some local vars. E.g. in [ACTION]
+our %OBJECTS = (); # Already created objects {"$OBJECT.$LABEL"} to avoid dups
+our $ACTION; # The final action, if one needed.
+
+# Object names in common MUST be constructed as follow:
+#   "$did.$SUFFIX.$OI.$oi" for alpha-numeric identifiers
+# "8123338080", "3338080" - root objects: main and reduced form
+# "3338080.M" - short form for "3338080.M.0.0"
+# "3338080.M.1" - short form for "3338080.M.1.0"
+#
+#   "$OI$did" for numeric-only identifiers
+# "3338080" - short form for "0003338080"
+# "0013338080","0023338080",...
+#
+#   "$did.$OI" for asterisk internal objects like queues
+
+
+my $ID;
+my $ITERATOR = 0;
+my $OIx = 0;
+my $NAME;
+
+my ($Section, $Description);    # [Func "YeaStar","8125961939","8123381233","8123387788","8123387799" "ALL"] ; some description
+my ($key, $value);
+my %Actions = ();                # Action.Id->ITERATOR as hash
+my %Menus = ();                  # Menu.Id->ITERATOR as hash
+
+my $debug;
+
+
+sub FN { # Function name constructor ::FN(position)
+ my $inc = shift // 0;
+ $inc += $oi;
+
+ return $DID if ($OBJECT eq 'ROOT' && $OI{$OBJECT}+$inc == 0);
+
+ $inc = ($inc > 0) ? ".$inc" : '';
+ return $LABELS{"$OBJECT.$LABEL"}."$inc";
+}
+
+sub ON { # [OBJECT] name constructor ::ON
+ my $_ = uc(shift) // 'ROOT';
+ my $label = shift // '';
+ my $o1 = '';
+ my $s = '';
+
+# print "~~~$_=$label~~~\n";
+ return if (defined $LABELS{"$_.$label"});
+
+ if (defined $OI{$_}) {
+  $OI{$_}++ ;
+  $o1 = $OI{$_};
+ } else {
+  $OI{$_} = 0;
+ }
+
+ $s = '.'.substr($_,0,1) unless /ROOT/;
+ $LABELS{"$_.$label"} = "$did$s$o1";
+
+ return;
+}
+
+sub FL { # Format numeric|alphanumeric label
+ my $_ = uc(shift) // 'ROOT';
+ my $label = shift // '';
+ my $numeric = shift;
+
+ ON($_,$label) unless defined $LABELS{"$_.$label"};
+ $_ = $LABELS{"$_.$label"};
+ if ($numeric) {
+  my $s = $_;
+  $s =~ s/^\d+\.[A-Z]//;
+  if ($s) {
+   return sprintf("%03d", $s) . $did;
+  } else {
+   return $did;
+  }
+ } else {
+  s/(^\d+\.)[A-Z]/$1/;
+  s/\.+$//;
+  return $_;
+ }
+}
+
+
+# Load all modules from /schema.d/action/
+my @pm = glob abs_path($0).".d/action/*.pm";
+foreach my $module (@pm) {
+ $module =~ s|^.+/|action::|g;
+ $module =~ s|\.pm$||;
+ eval("use $module;");
+}
+
+# Process config
+open(CONF, '<-');
+if (tell(CONF) != -1) {
+ Config();
+}
+exit;
+#############################################################################
+
+sub Config {
+ my $remark = 0;
+ my $descr; # Action description
+ foreach (<CONF>) { # Process config file
+  last if /^[\s]*-\/\/-/ && !$remark;
+  $remark = !$remark if (/^[\s]*\"\"\"/); # Comment blocks between """ .. """
+  if ($remark) {
+   $_ = " $_" unless (/^[\s]/);
+   print ";$_" unless (/^[\s]*\"\"\"/);
+   next;
+  }
+  if (/^[\s]*\"\"\"/) {
+   print "\n";
+   next;
+  }
+
+  if (/^;.+|^#.+|^$/) { # Comment after ";" or "#"
+   print "#$1\n" if (/^[;#][;#](.+)/);
+   next;
+  };
+  $_ = trim($_);
+
+#  if (/^[\s\t]*\[.+\]/p) { # e.g. /[REDIRECT 8123029037 B 3298] ;some ; description/
+  if (/^[\s\t]*\[([^\]'"]+|(["][^"]+["])|(['][^']+[']))+\]/p) {
+   if ($Section ne '') { # Process previous section
+    Object($Section, $Description, \%Fields);
+   }
+
+   $Section = ${^MATCH};
+   $Description = ${^POSTMATCH};
+
+   $Section =~ s/^\[//;
+   $Section =~ s/\]$//;
+
+   $Description =~ s/^.*?[#;]//; # Not greedily match to get "some ; description"
+#   %Fields = (); # Empty fields at new section
+   NewSection($Section, $Description);
+  } else { # Add Field->Value
+   if (/^\[\]/p) { # Lists
+    if (%Fields) {
+     Object($Section, $Description, \%Fields);
+#     %Fields = (); # Empty fields at new section
+    }
+    $Description = ${^POSTMATCH};
+    $Description =~ s/^.*?[#;]//; # Not greedily match to get "some ; description"
+   }
+
+   if (/^[^#;].+?=/p) {
+    $key = ${^MATCH};
+    $value = ${^POSTMATCH};
+
+    if ($value =~ /^[\s]*((\'.*?(?<!\\)\')|(\".*?(?<!\\)\")|([^"';]+))+/p) {
+     $value = ${^MATCH};
+     $descr = ${^POSTMATCH};
+    }
+    $value = trim($value);
+
+    $key =~ s/=$//;
+    $key = unquote(trim($key));
+
+    if ($key eq 'Action') {
+     Action($value, $descr);
+    } else {
+     if ($OBJECT !~ '^(ROOT|ACTION)$') {
+      if ($value ne '') {
+       $Fields{"$OBJECT.$LABEL.$key"} = $value;
+      } else {
+       delete $Fields{"$OBJECT.$LABEL.$key"};
+      }
+     } else {
+      if ($value ne '') {
+       $Fields{"ROOT.$key"} = $value;
+      } else {
+       delete $Fields{"ROOT.$key"};
+      }
+     }
+    }
+   }
+  }
+ }
+
+ if ($Section ne '') { # Process last section
+  Object($Section, $Description, \%Fields);
+ }
+} # sub Config
+
+sub Action {
+ return if $OBJECT =~ /^DIAL|EXT|MENU$/ && $oi >= 0; # Only built-in actions!
+ my $_ = shift;
+ my $descr = shift;
+ my $inline;
+
+ my @p = ();
+ Keys($_,\@p);
+
+ $_ = lc(shift @p);
+ if ($_ eq '=') { # Inline object definition
+  $_ = lc(shift @p);
+  $inline = 1;
+ }
+
+ ON(uc($_),join(' ', @p));
+
+ if (defined(&{"$_"})) {
+  my $SUB = \&$_;
+  $ACTION = $SUB->(\@p, $descr, $inline);
+ } else {
+  print STDERR "Action unknown: \"$_\"\n";
+  exit 1;
+ }
+
+ $oi++;
+ return;
+}
+
+sub NewSection {
+ my $_ = shift; # String
+
+ my @k = (); # Section >> keys
+ &Keys($_,\@k);
+
+ $_ = unquote(trim($k[0]));
+ if ($k[1] eq '') {
+  print STDERR "No identifier for object \"$_\"\n";
+  exit 1;
+ }
+
+ if (/^ROOT|^\*/) {
+  if ($OBJECT ne '') {
+   print STDERR "ROOT must not be redeclared!\n";
+   exit 1;
+  }
+  $OBJECT = 'ROOT';
+  $DID = unquote(trim($k[1]));
+  $DID =~ s/[\D]//g;
+
+  $_ = $DID;
+  eval(eval($REDUCE));
+  $did = $_;
+
+  $BIND = unquote(trim($k[2]));
+  $BIND =~ s/[^\d\w]//g;
+
+  $NAME = $DID;
+ } else {
+  if ($DID eq '') {
+   print STDERR "ROOT must be declared first!\n";
+   exit 1;
+  }
+  $OBJECT = uc($k[0]);
+  $LABEL = $k[1];
+
+  $ID = $k[1];
+  $SUFFIX = '.' . substr($OBJECT,0,1);
+
+#  for (keys %Fields) {
+#    delete $Fields{$_} if (/^$OBJECT\./);
+#  }
+ }
+
+# $Actions{"action.$ID"} //= $ITERATOR if /ACTION/;
+# print "****  Actions{action.$ID} = $ITERATOR\n" if /ACTION/;
+ $Actions{lc($OBJECT).".$ID"} //= $ITERATOR unless /ROOT/;
+
+ $OIx = 0; # OBJECT ITERATOR
+
+ ON($OBJECT,$LABEL);
+# if (defined $OI{$OBJECT}) {
+#  $OI{$OBJECT}++ ;
+# } else {
+#  $OI{$OBJECT} = 0;
+# }
+# $LABELS{"$OBJECT.$LABEL"} //= FN();
+ $oi = 0;
+
+# for (keys %::LABELS) {
+#  print "* $_ >> $::LABELS{$_}\n";
+# }
+ return;
+}
+
+sub Object {
+ my $_ = shift; # String
+
+ Action($ACTION) if defined($ACTION);
+ return if (/^ROOT|^\*/);
+
+ my $Description = shift // ''; # String
+ $Description = trim($Description);
+ $Description = ' ; ' . $Description if ($Description ne '');
+
+ my @k = (); # Section >> keys
+ &Keys($_,\@k);
+ $_ = uc(shift @k);
+
+ if (defined(&{"$_"})) {
+  my $SUB = \&$_;
+  $SUB->(\@k, $Description);
+ } else {
+  print STDERR "Object unknown: \"$_\"\n";
+  exit 1;
+ }
+
+ return;
+}
+
+sub Keys { # Space-separated
+ my $_ = shift;
+ my $k = shift; # Array reference
+
+# while (/(^[\s\t]*[^'"\s\t]+)|^[\s\t"]+([^"]|\\\")*[\s\t]*[^\\]?["]+|^[\s\t]*[']([^']|\\\')*[^\\]?[']([\s]+|$)/p) {
+ while (/^[\s]*((\'.*?(?<!\\)\')|(\".*?(?<!\\)\")|[^'"\s]+)([\s]+|$)/p) {
+  push (@{$k}, trim(${^MATCH}));
+#  print "***${^MATCH}***\n";
+  $_ = ${^POSTMATCH};
+ }
+ return;
+}
+
+sub CSV { # Comma-separated
+ my $_ = shift;
+ my $k = shift; # Array reference
+ my $c = shift // ','; # Field separator
+
+ while (/^[\s]*((\'.*?(?<!\\)\')|(\".*?(?<!\\)\")|[^'"\s$c]+)([\s]*[$c]|$)|^[\s]*,/p) {
+  push (@{$k}, unquote($1));
+  $_ = ${^POSTMATCH};
+ }
+ return;
+}
+
+#############################################################################
+sub trim($) # Trim spaces
+{
+ my $string = shift;
+ $string =~ s/^[\s\t]+//;
+ $string =~ s/[\s\t]+$//;
+ return $string;
+}
+
+sub unquote($)
+{
+ my $string = shift;
+
+ while ($string =~ m/^"(.*)"$|^'(.*)'$/) { # Trim matching quotes
+  $string =~ s/^"(.*)"$/\1/;
+  $string =~ s/^'(.*)'$/\1/;
+ }
+ return $string;
+}
+
+sub quote { # http://cpansearch.perl.org/src/TIMB/DBI-1.632/DBI.pm
+ my $string = shift;
+ return "NULL" unless defined $string;
+ return "NULL" if ($string eq 'NULL');
+ $string =~ s/'/''/g;		# ISO SQL2
+ return "'$string'";
+}
+
+sub quote_identifier {
+ my $string = shift;
+ $string =~ s/"/""/g;
+ return "\"$string\"";
+}
+
+sub debug {
+ return unless ($debug);
+ my $string = shift;
+ print STDERR $string . "\n";
+}
