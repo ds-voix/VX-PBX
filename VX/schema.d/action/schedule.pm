@@ -56,7 +56,7 @@ sub SCHEDULE {
 
  my $s = 'Schedules';
  for (sort keys %::Fields) {
-  if (/^SCHEDULE\./) {
+  if (/^SCHEDULE\.$::LABEL\./) {
    print "[$s]\n";
    $s = '';
 
