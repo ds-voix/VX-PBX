@@ -50,7 +50,7 @@ sub EXT { # Declare extension
  print "[Exten $ext]$descr\n";
 
  for (sort keys %::Fields) {
-  if (/^EXT\./p) {
+  if (/^EXT\.$::LABEL\./p) {
    my $val = $::Fields{$_};
    $val //= '';
    my $key = ${^POSTMATCH};
@@ -77,9 +77,9 @@ sub EXT { # Declare extension
  my @act = ();
  my @lb = ();
 
- my $TransferOnBusy = $::Fields{'EXT.TransferOnBusy'};
- my $TransferOnTimeout = $::Fields{'EXT.TransferOnTimeout'};
- my $TransferCall = $::Fields{'EXT.TransferCall'};
+ my $TransferOnBusy = $::Fields{"EXT.$::LABEL.TransferOnBusy"};
+ my $TransferOnTimeout = $::Fields{"EXT.$::LABEL.TransferOnTimeout"};
+ my $TransferCall = $::Fields{"EXT.$::LABEL.TransferCall"};
  my @k = ();
  my $val;
 

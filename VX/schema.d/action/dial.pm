@@ -84,18 +84,19 @@ sub DIAL { # Extension as hunting group
 
  my $ext = $::LABELS{"DIAL.".join(' ', @p)};
 
- my $Hunt = $::Fields{'DIAL.Hunt'} // $::Fields{'ROOT.Hunt'} // 'P';
+ my $Hunt = $::Fields{"DIAL.$::LABEL.Hunt"} // $::Fields{'ROOT.Hunt'} // 'P';
+ my $MailTo = $::Fields{"DIAL.$::LABEL.MailTo"} // $::Fields{'ROOT.MailTo'};
 # print "*** $Hunt\n ";
  $Hunt = uc(substr($Hunt,0,1));
  $Hunt = 'P' unless ($Hunt =~ /^[PRS]/);
 
- my $Timeout = $::Fields{'DIAL.Timeout'} // $::Fields{'ROOT.Timeout'} // '86400';
+ my $Timeout = $::Fields{"DIAL.$::LABEL.Timeout"} // $::Fields{'ROOT.Timeout'} // '86400';
  $Timeout =~ s/\D//g;
 
- my $MOH = $::Fields{'DIAL.MOH'} // $::Fields{'ROOT.MOH'} // '';
- my $CID = $::Fields{'DIAL.CID'} // $::Fields{'ROOT.CID'} // '';
+ my $MOH = $::Fields{"DIAL.$::LABEL.MOH"} // $::Fields{'ROOT.MOH'} // '';
+ my $CID = $::Fields{"DIAL.$::LABEL.CID"} // $::Fields{'ROOT.CID'} // '';
  my @Dial = ();
- ::Keys($::Fields{'DIAL.Dial'},\@Dial);
+ ::Keys($::Fields{"DIAL.$::LABEL.Dial"},\@Dial);
 
  $_ = uc(substr($CID,0,1));
  $CID = '';
@@ -105,6 +106,7 @@ sub DIAL { # Extension as hunting group
  print "[Exten $ext]$descr\n";
  print " CallLevel = 4 ; Limit hunting to in-zone calls\n";
  print " MOH = $MOH ; Music class\n" if $MOH ne '' && $MOH !~ /^r(ing)?$/i;
+ print " MailTo = $MailTo ; Email missed rings\n" if defined $MailTo;
 
  if (scalar @Dial < 2) {
   if (defined $Dial[0]) {
@@ -128,8 +130,8 @@ sub DIAL { # Extension as hunting group
  my $lab = $::LABEL;  #
  $::OBJECT = 'DIAL';
 
- my $TransferOnBusy = $::Fields{'DIAL.TransferOnBusy'};
- my $TransferOnTimeout = $::Fields{'DIAL.TransferOnTimeout'};
+ my $TransferOnBusy = $::Fields{"DIAL.$::LABEL.TransferOnBusy"};
+ my $TransferOnTimeout = $::Fields{"DIAL.$::LABEL.TransferOnTimeout"};
  my @k = ();
  my $val;
 
@@ -143,7 +145,7 @@ sub DIAL { # Extension as hunting group
    push(@lb, "TransferOnBusy");
    $val = $::LABELS{"DIAL.TransferOnBusy"};
   }
-  print " TransferOnBusy = $val\n";
+  print " TransferOnBusy = !$val\n";
  }
  if (defined $TransferOnTimeout) {
   ::Keys($TransferOnTimeout,\@k);
@@ -155,7 +157,7 @@ sub DIAL { # Extension as hunting group
    push(@lb, "TransferOnTimeout");
    $val = $::LABELS{"DIAL.TransferOnTimeout"};
   }
-  print " TransferOnTimeout = $val\n";
+  print " TransferOnTimeout = !$val\n";
  }
 
  print "\n";

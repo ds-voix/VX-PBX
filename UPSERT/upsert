@@ -93,7 +93,7 @@ if ($conf ne '') { # Open config file or STDIN for input
   @files = glob "$conf"; # May be directory or some wildcard
  }
 
- foreach $conf (@files) {
+ foreach $conf (sort @files) {
 # print "$conf\n";
 #  $conf = unquote($conf);
   next unless (-f $conf);
@@ -107,7 +107,7 @@ if ($conf ne '') { # Open config file or STDIN for input
   }
   if ($BindSource eq '.conf' | $BIND eq 'conf') { # Get BIND from file name
    $BIND = basename(readlink("/proc/$$/fd/$fd"));
-   $BIND =~ s/\..+?$//;   # Strip .suffix, the rest is BIND
+   $BIND =~ s/\.[^.]+$//;   # Strip .suffix, the rest is BIND
   }
   $BIND //= $BindSource unless $BindSource eq '.var';
 
