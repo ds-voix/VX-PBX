@@ -292,7 +292,8 @@ CREATE TABLE "Menu" (
  "7" text NULL,
  "8" text NULL,
  "9" text NULL,
- "*" text DEFAULT 'BACK' NULL,        -- Back to previous menu by *
+ "*" text DEFAULT 'BACK' NULL,           -- Back to previous menu by *
+ "#" text DEFAULT 'BACK:BACK:BACK' NULL, -- Back to root menu by #, m.b. although BACK:SomeFunc(Foo,bar,,)
  "Timeout" smallint DEFAULT 10 NOT NULL,
  "TimeoutAction" text NULL,
  "Repeat" smallint DEFAULT 10 NOT NULL,

@@ -49,7 +49,7 @@ sub MENU { # Declare menu
    $val = ::unquote($::Fields{$_}) // '';
    $key = ${^POSTMATCH};
 
-   if ($key =~/^[(]?[\s'"]*([0-9*#]|TimeoutAction)[\s'",]*/ && $val ne 'BACK') {
+   if ($key =~/^[(]?[\s'"]*([0-9*#]|TimeoutAction)[\s'",]*/ && $val !~ '^BACK:?') {
     my $l = $1;
     my @k = ();
     &Keys($::Fields{$_},\@k);
@@ -71,7 +71,7 @@ sub MENU { # Declare menu
     if ($key eq 'Parent') {
      $val = ::FL('MENU',$val,1);
     }
-    print "$key = '$val'\n";
+    print "\"$key\" = '$val'\n";
    }
   }
  }

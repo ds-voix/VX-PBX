@@ -45,28 +45,28 @@ sub dial {
   my @params = @p ; # ($p[0]);
 
   ::CSV(shift @p, \@d); # Dial
-  $::Fields{"DIAL.Dial"} = join(' ', @d);
+  $::Fields{"DIAL.$::LABEL.Dial"} = join(' ', @d);
 
   @d = ();
   ::CSV(shift @p, \@d); # Spec
   if (defined $d[0] && $d[0] !~ /^m/i) {
-   $::Fields{"DIAL.Hunt"} = $d[0] if $d[0];
-   $::Fields{"DIAL.MOH"} = $d[1] if defined $d[1] && $d[1] !~ /^m(oh)?$/i;
-   $::Fields{"DIAL.CID"} = $d[2];
+   $::Fields{"DIAL.$::LABEL.Hunt"} = $d[0] if $d[0];
+   $::Fields{"DIAL.$::LABEL.MOH"} = $d[1] if defined $d[1] && $d[1] !~ /^m(oh)?$/i;
+   $::Fields{"DIAL.$::LABEL.CID"} = $d[2];
   } else {
-   $::Fields{"DIAL.CID"} = $d[1];
+   $::Fields{"DIAL.$::LABEL.CID"} = $d[1];
   }
-  $::Fields{"DIAL.Timeout"} = shift @p;
+  $::Fields{"DIAL.$::LABEL.Timeout"} = shift @p;
 
   @d = split('\|', join(' ', @params)); # Spec
 
   my $t = ::unquote(::trim($d[1])) // '';
   $t = "= dial $t" if $t && $t !~ /^([A-Za-z_.-]+|=)[\s]/;
-  $::Fields{"DIAL.TransferOnBusy"} = ($t ne '') ? $t : undef;
+  $::Fields{"DIAL.$::LABEL.TransferOnBusy"} = ($t ne '') ? $t : undef;
 
   $t = ::unquote(::trim($d[2])) // '';
   $t = "= dial $t" if $t && $t !~ /^([A-Za-z_.-]+|=)[\s]/;
-  $::Fields{"DIAL.TransferOnTimeout"} = ($t ne '') ? $t : undef;
+  $::Fields{"DIAL.$::LABEL.TransferOnTimeout"} = ($t ne '') ? $t : undef;
 
   DIAL(\@params, ' ; inline');
  }
@@ -116,7 +116,7 @@ sub DIAL { # Extension as hunting group
    }
    print " TransferCall = $CID$Dial[0]\n";
   } else {
-   print "; Nothing to dial is defined!"
+   print "; Nothing to dial is defined!\n"
   }
  } else {
    print " SpawnCalls = :$Hunt$CID:," . join(',',@Dial) . "\n";
