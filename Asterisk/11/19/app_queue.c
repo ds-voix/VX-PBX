@@ -28,6 +28,8 @@
  announce-time-limit: Say no more then X minutes
  announce-delay: Delay seconds before doing first position/time announce
  periodic-announce-limit: Play periodic announces no more then X times, X=-1 to play infinitely
+
+ Added "sayposition" argument to Queue application.
 */
 
 /*! \file
@@ -250,6 +252,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 				<para>Attempt to enter the caller into the queue at the numerical position specified. <literal>1</literal>
 				would attempt to enter the caller at the head of the queue, and <literal>3</literal> would attempt to place
 				the caller third in the queue.</para>
+			</parameter>
+			<parameter name="sayposition"><!-- PnD! -->
+				<para>Fake position to be announced in some circumstances.</para>
 			</parameter>
 		</syntax>
 		<description>
@@ -3205,8 +3210,12 @@ static int say_position(struct queue_ent *qe, int ringing)
 	/* Log position to make restoration possible */
 	if (qe->parent->poslog && (qe->pos != qe->ppos)) {
  		ast_queue_log(qe->parent->name, ast_channel_uniqueid(qe->chan), "NONE", "POS", "%d|%d|%ld|%s", qe->pos, qe->opos, (long) (time(NULL) - qe->start),
- 		S_COR(ast_channel_caller(qe->chan)->id.number.valid, ast_channel_caller(qe->chan)->id.number.str, "<unknown>"));
+			S_COR(ast_channel_caller(qe->chan)->id.number.valid, ast_channel_caller(qe->chan)->id.number.str, "<unknown>"));
 		qe->ppos = qe->pos;
+		if (qe->parent->count < 2) {
+		/* Log first call in queue, e.g. to facilitate crash detection */
+	 		ast_queue_log(qe->parent->name, ast_channel_uniqueid(qe->chan), "NONE", "FIRST", "%s", S_COR(ast_channel_caller(qe->chan)->id.number.valid, ast_channel_caller(qe->chan)->id.number.str, "<unknown>"));
+		}
 	}
 
         int pos = qe->pos + qe->parent->offset;
@@ -7141,6 +7150,7 @@ static int queue_exec(struct ast_channel *chan, const char *data)
 	char *parse;
 	int makeannouncement = 0;
 	int position = 0;
+	int sayposition = 0; /* PnD! */
 	AST_DECLARE_APP_ARGS(args,
 		AST_APP_ARG(queuename);
 		AST_APP_ARG(options);
@@ -7152,6 +7162,7 @@ static int queue_exec(struct ast_channel *chan, const char *data)
 		AST_APP_ARG(gosub);
 		AST_APP_ARG(rule);
 		AST_APP_ARG(position);
+		AST_APP_ARG(sayposition); /* PnD! */
 	);
 	/* Our queue entry */
 	struct queue_ent qe = { 0 };
@@ -7159,14 +7170,15 @@ static int queue_exec(struct ast_channel *chan, const char *data)
 	char *opt_args[OPT_ARG_ARRAY_SIZE];
 
 	if (ast_strlen_zero(data)) {
-		ast_log(LOG_WARNING, "Queue requires an argument: queuename[,options[,URL[,announceoverride[,timeout[,agi[,macro[,gosub[,rule[,position]]]]]]]]]\n");
+		ast_log(LOG_WARNING, "Queue requires an argument: queuename[,options[,URL[,announceoverride[,timeout[,agi[,macro[,gosub[,rule[,position[,sayposition]]]]]]]]]]\n"); /* PnD! */
 		return -1;
 	}
 
 	parse = ast_strdupa(data);
 	AST_STANDARD_APP_ARGS(args, parse);
 
-	ast_debug(1, "queue: %s, options: %s, url: %s, announce: %s, timeout: %s, agi: %s, macro: %s, gosub: %s, rule: %s, position: %s\n",
+/* PnD! */
+	ast_debug(1, "queue: %s, options: %s, url: %s, announce: %s, timeout: %s, agi: %s, macro: %s, gosub: %s, rule: %s, position: %s, sayposition: %s\n",
 		args.queuename,
 		S_OR(args.options, ""),
 		S_OR(args.url, ""),
@@ -7176,7 +7188,8 @@ static int queue_exec(struct ast_channel *chan, const char *data)
 		S_OR(args.macro, ""),
 		S_OR(args.gosub, ""),
 		S_OR(args.rule, ""),
-		S_OR(args.position, ""));
+		S_OR(args.position, ""),
+		S_OR(args.sayposition, ""));
 
 	if (!ast_strlen_zero(args.options)) {
 		ast_app_parse_options(queue_exec_options, &opts, opt_args, args.options);
@@ -7255,6 +7268,16 @@ static int queue_exec(struct ast_channel *chan, const char *data)
 		}
 	}
 
+// <PnD!>
+	if (args.sayposition) {
+		sayposition = atoi(args.sayposition);
+		if (sayposition < 0) {
+			ast_log(LOG_WARNING, "Invalid sayposition '%s' given for call to queue '%s'. Assuming no preference for sayposition\n", args.sayposition, args.queuename);
+			sayposition = 0;
+		}
+	}
+// </PnD!>
+
 	ast_debug(1, "queue: %s, expires: %ld, priority: %d\n",
 		args.queuename, (long)qe.expire, prio);
 
@@ -7262,7 +7285,7 @@ static int queue_exec(struct ast_channel *chan, const char *data)
 	qe.prio = prio;
 	qe.max_penalty = max_penalty;
 	qe.min_penalty = min_penalty;
-	qe.last_pos_said = 0;
+	qe.last_pos_said = sayposition;
 	qe.last_hold_said = time(NULL);
 	qe.last_pos = 0;
 	qe.last_periodic_announce_time = time(NULL);
