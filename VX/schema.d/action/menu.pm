@@ -23,9 +23,9 @@ sub menu {
  print " Macro = Menu ; (NRec,NoHang,Limit)\n";
 
  print " P1 = \'" . ::FL('MENU',join(' ',@p),1) . "\'\n";
- if (defined $::Fields{"ROOT.CallLimit"} && $::Fields{"ROOT.CallLimit"} =~ /^\d+$/) {
-  print " P3 = " . $::Fields{"ROOT.CallLimit"} . "\n";
-  delete $::Fields{"ROOT.CallLimit"};
+ if (defined $::Fields{"ROOT.calllimit"} && $::Fields{"ROOT.calllimit"} =~ /^\d+$/) {
+  print " P3 = " . $::Fields{"ROOT.calllimit"} . "\n";
+  delete $::Fields{"ROOT.calllimit"};
  }
 
  print "\n";
@@ -49,7 +49,7 @@ sub MENU { # Declare menu
    $val = ::unquote($::Fields{$_}) // '';
    $key = ${^POSTMATCH};
 
-   if ($key =~/^[(]?[\s'"]*([0-9*#]|TimeoutAction)[\s'",]*/ && $val !~ '^BACK:?') {
+   if ($key =~/^[(]?[\s'"]*([0-9*#]|timeoutaction)[\s'",]*/ && $val !~ '^BACK:?') {
     my $l = $1;
     my @k = ();
     &Keys($::Fields{$_},\@k);
@@ -62,15 +62,17 @@ sub MENU { # Declare menu
      push(@lb, $key);
      $val = "Func(" . $::LABELS{"MENU.$key"} . ")";
     }
-    $key = '"' . $key . '"' unless ($key eq 'TimeoutAction') || $key =~ /^\(/;
+    $key = '"' . $key . '"' unless ($key eq 'timeoutaction') || $key =~ /^\(/;
+    ${key} = 'TimeoutAction' if ($key eq 'timeoutaction');
     $ACT{$key} = $val;
    } else {
-    if ($key =~ /Hello|Prompt/) {
+    if ($key =~ /hello|prompt/) {
      $val = "$::BIND/$val" if ($val ne '');
     }
-    if ($key eq 'Parent') {
+    if ($key eq 'parent') {
      $val = ::FL('MENU',$val,1);
     }
+    $key = uc(substr($key,0,1)) . substr($key,1);
     print "\"$key\" = '$val'\n";
    }
   }

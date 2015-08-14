@@ -1,5 +1,6 @@
 action::vm;
-# macro VM(MailBox,MailContext,flags,fn)
+## macro VM(MailBox,MailContext,flags,fn)
+# macro VMail(Mail,MaxLength,Prompt,fn)
 
 use strict;
 use warnings;
@@ -19,21 +20,31 @@ sub vm {
 
  my @p = @{$_};
 
- print "[Func ". ::FN() ."] $descr\n";
- print " Macro = VM ; (MailBox,MailContext,flags,fn)\n";
+ my $bind = '';
+ $bind = "$::BIND/" if ($::BIND ne '' && uc($::BIND) ne 'NULL');
 
- my $MailBox = $p[0] // $::Fields{'ROOT.Admin'};
+ print "[Func ". ::FN() ."] $descr\n";
+ print " Macro = VMail ; (Mail,MaxLength,Prompt,fn)\n";
+
+ my $MailBox = $p[0] // $::Fields{'ROOT.admin'};
  if (defined $MailBox) {
-  print " P1 = \'$MailBox\'\n";
+  $MailBox =~ s/\,/\%/g;
+  print " P1 = \'" . ::unquote($MailBox) . "\'\n";
  } else {
   print "; Mailbox not defined!\n";
  }
 
- my $MailContext = $p[1];
- my $flags = $p[2];
+ my $MaxLength = $p[1];
+ my $Prompt = $p[2];
 
- print " P2 = $MailContext\n" if defined $MailContext;
- print " P3 = $flags\n" if defined $flags;
+ print " P2 = " . ::unquote($MaxLength) . "\n" if defined $MaxLength;
+ if (defined $Prompt) {
+  if (::unquote($Prompt) ne ':') {
+   print " P3 = $bind" . ::unquote($Prompt) . "\n";
+  } else {
+   print " P3 = " . ::unquote($Prompt) . "\n";
+  }
+ }
  print " P4 = Func(". ::FN(1) .")\n" if $::oi >= 0; # Break chain for special objects
 
  print "\n";

@@ -29,16 +29,16 @@ sub queue {
  my $bind = '';
  $bind = "$::BIND/" if ($::BIND ne '' && uc($::BIND) ne 'NULL');
 
- if (defined $::Fields{"$label.Hello"}) {
-  $play = "\'$bind" . ::unquote($::Fields{"$label.Hello"})."\'";
+ if (defined $::Fields{"$label.hello"}) {
+  $play = "\'$bind" . ::unquote($::Fields{"$label.hello"})."\'";
  } else {
-  if (defined $::Fields{"ROOT.Hello"}) {
-   $play = "\'$bind" . ::unquote($::Fields{"ROOT.Hello"})."\'";
-   delete $::Fields{"ROOT.Hello"};
+  if (defined $::Fields{"ROOT.hello"}) {
+   $play = "\'$bind" . ::unquote($::Fields{"ROOT.hello"})."\'";
+   delete $::Fields{"ROOT.hello"};
   }
  }
 
- my $wait = $::Fields{"ROOT.Wait"} // '';
+ my $wait = $::Fields{"ROOT.wait"} // '';
 
  if ($inline) { # Make object
 #  for (keys %::Fields) {
@@ -54,29 +54,31 @@ sub queue {
    my @d = ();
    ::CSV($p[1], \@d); # Spec
    $extra = undef if (defined $d[1] && $d[1] !~ /^r(ing)?$/i) || (defined $d[0] &&  !defined $d[1] && $d[0] =~ /^m/i);
-   $::Fields{"$label.MOH"} //= $::Fields{"ROOT.MOH"} // $d[1];
+   $::Fields{"$label.MOH"} //= $::Fields{"ROOT.moh"} // $d[1];
+#   $play = "$bind" . ::unquote($p[2]) if defined $p[2];
   } else {
    if ($p[0] eq '=' && $p[1] =~ /^(dial|queue)$/i) {
     my @d = ();
     ::CSV($p[3], \@d); # Spec
     $extra = undef if defined $d[1] && $d[1] !~ /^r(ing)?$/i;
     $::Fields{"$label.MOH"} = $d[1];
-    $::Fields{"$label.MOH"} //= $::Fields{"ROOT.MOH"} // $d[1];
+    $::Fields{"$label.MOH"} //= $::Fields{"ROOT.moh"} // $d[1];
+    $play = "$bind" . ::unquote($p[4]) if defined $p[4];
    }
   }
 
   if ($p[0] =~ /^(ext|action)$/i) {
    if (defined $p[2]) {
     $extra = undef if defined $p[2] && $p[2] !~ /^r(ing)?$/i;
-    $::Fields{"$label.MOH"} //= $::Fields{"ROOT.MOH"} // $p[2];
+    $::Fields{"$label.MOH"} //= $::Fields{"ROOT.moh"} // $p[2];
    }
-   $play = "$bind$p[3]" if defined $p[3];
+   $play = "$bind" . ::unquote($p[3]) if defined $p[3];
   }
  } else {
   $act = join(' ', @p);
   $wait = $p[3] if defined $p[3];
   $extra = undef if defined $p[1] && $p[1] !~ /^r(ing)?$/i;
-  $play = "$bind$p[2]" if defined $p[2] && $p[2] =~ /[\d\w]/;
+  $play = "$bind" . ::unquote($p[2]) if defined $p[2] && $p[2] =~ /[\d\w]/;
  }
 
  $wait =~ s/\D//g;
@@ -88,13 +90,13 @@ sub queue {
 
  print "[Func ". ::FN() ."] $descr\n";
 
- if (defined $::Fields{"ROOT.Indication"}) {
+ if (defined $::Fields{"ROOT.indication"}) {
   print " Macro = Indication ; (fn,Timeout,NoTransfer,Limit)\n";
   $play //= '';
   $noanswer //= '';
   $extra //= '';
   print " P1 = queue(" . ::FL('QUEUE',$act) . ",$play,$noanswer,$extra) ; (name,play,noanswer,extra)\n";
-  print " P2 = " . $::Fields{"ROOT.Indication"} . "\n" if $::Fields{"ROOT.Indication"} =~ /^\d+$/ && $::Fields{"ROOT.Indication"};
+  print " P2 = " . $::Fields{"ROOT.indication"} . "\n" if $::Fields{"ROOT.indication"} =~ /^\d+$/ && $::Fields{"ROOT.indication"};
  } else {
   print " Macro = queue ; (name,play,noanswer,extra)\n";
 
@@ -149,13 +151,13 @@ sub QUEUE {
 
  my @p = @{$_};
 
-# my $Hunt = $::Fields{'QUEUE.Hunt'} // '';
- my $Timeout = $::Fields{"QUEUE.$::LABEL.Timeout"} // $::Fields{'ROOT.Timeout'};
- my $MOH = $::Fields{"QUEUE.$::LABEL.MOH"} // $::Fields{'ROOT.MOH'};
- my $CID = $::Fields{"QUEUE.$::LABEL.CID"} // '';
-# my $Dial = $::Fields{"QUEUE.$::LABEL.Dial"};
+# my $Hunt = $::Fields{'QUEUE.hunt'} // '';
+ my $Timeout = $::Fields{"QUEUE.$::LABEL.timeout"} // $::Fields{'ROOT.timeout'};
+ my $MOH = $::Fields{"QUEUE.$::LABEL.moh"} // $::Fields{'ROOT.moh'};
+ my $CID = $::Fields{"QUEUE.$::LABEL.cid"} // '';
+# my $Dial = $::Fields{"QUEUE.$::LABEL.dial"};
  my @Exten = ();
- ::Keys($::Fields{"QUEUE.$::LABEL.Exten"},\@Exten);
+ ::Keys($::Fields{"QUEUE.$::LABEL.exten"},\@Exten);
 
  my $bind = '';
  $bind = "!$::BIND+" if ($::BIND ne '' && uc($::BIND) ne 'NULL');

@@ -38,6 +38,7 @@ use Time::Local;                # to do reverse of gmtime()
 #use Data::Dumper qw(Dumper);
 
 my %OBJECTS = ();               # All objects in config
+my $OBJ_COUNT = 0;
 my ($Section, $Description);    # [Func "YeaStar","8125961939","8123381233","8123387788","8123387799" "ALL"] ; some description
 my $Order;                      # For sorted lists
 my %Fields = ();                # Field->Value as hash
@@ -131,6 +132,8 @@ if ($conf ne '') { # Open config file or STDIN for input
 Clean() if ($clean);
 
 print "\nCOMMIT TRANSACTION;\n" if ($tran);
+
+print STDERR "DONE $OBJ_COUNT OBJECTS, $LINE LINES\n";
 exit;
 #############################################################################
 
@@ -577,6 +580,7 @@ sub upsert($)
  $FIELDS = quote_identifier(@Keys[0]);
  $VALUES = quote($k1);
  $OBJECTS{$Table}{quote_identifier(@Keys[0])} .= ',' . quote($k1) unless ($LIST|$DROP);
+ $OBJ_COUNT++;
  if (@Keys[1]) {
   $SET_KEYS .= " AND " . quote_identifier(@Keys[1]) . (quote($k2) ne 'NULL'?"=":' is ') . quote($k2);
   $FIELDS .= "," . quote_identifier(@Keys[1]);
