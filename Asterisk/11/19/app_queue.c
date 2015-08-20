@@ -1190,6 +1190,7 @@ struct queue_ent {
 	time_t last_periodic_announce_time;    /*!< The last time we played a periodic announcement */
 	int last_periodic_announce_sound;      /*!< The last periodic announcement we made */
 	time_t last_pos;                       /*!< Last time we told the user their position */
+	time_t last_log;                       /*!< Last time we logged position */ /* PnD! */
 	int last_hold_said;                    /*!< Last hold time we told */ /* PnD! */
 	int opos;                              /*!< Where we started in the queue */
 	int ppos;                     	       /*!< Previous position */ /* PnD! */
@@ -1613,6 +1614,12 @@ static inline void insert_entry(struct call_queue *q, struct queue_ent *prev, st
 	new->opos = *pos;
 	new->ppos = 0; /* PnD! */
 	new->periodicannouncelimit = q->periodicannouncelimit; /* PnD! */
+// <PnD!>
+	if (q->poslog && (q->count < 2)) {
+		/* Log first call in queue, e.g. to facilitate crash detection */
+		ast_queue_log(q->name, ast_channel_uniqueid(new->chan), "NONE", "FIRST", "%s", S_COR(ast_channel_caller(new->chan)->id.number.valid, ast_channel_caller(new->chan)->id.number.str, "<unknown>"));
+	}
+// </PnD!>
 }
 
 /*! \brief Check if members are available
@@ -3032,7 +3039,20 @@ static int join_queue(char *queuename, struct queue_ent *qe, enum queue_result *
 		return res;
 	}
 	ao2_lock(q);
-
+// <PnD!>
+        int pos1 = 0;
+        if (qe->last_pos_said > 0) {
+		for (cur = q->head; cur; cur = cur->next) {
+        		if ((cur->last_pos_said == position) && (cur->pos > pos1)) {
+        			pos1 = cur->pos;
+	        	}
+		}
+		if (pos1 >= position) {
+			ast_verb(3, "ENTER %d in %d\n",position,pos1);
+			position = pos1 + 1;
+		}
+	}
+// </PnD!>
 	/* This is our one */
 	if (q->joinempty) {
 		int status = 0;
@@ -3203,19 +3223,21 @@ static int say_position(struct queue_ent *qe, int ringing)
 
 	// <PnD!>
         int dt = (time(NULL) - qe->start);
+	time(&now);
 	if (qe->parent->announcedelay > dt) {
 		return 0;
 	}
 
 	/* Log position to make restoration possible */
-	if (qe->parent->poslog && (qe->pos != qe->ppos)) {
- 		ast_queue_log(qe->parent->name, ast_channel_uniqueid(qe->chan), "NONE", "POS", "%d|%d|%ld|%s", qe->pos, qe->opos, (long) (time(NULL) - qe->start),
+	if (qe->parent->poslog && ((qe->pos != qe->ppos) || ((now - qe->last_log) >= 60))) {
+		int last_pos_said = qe->last_pos_said;
+		if (last_pos_said == 0) {
+			last_pos_said = qe->pos;
+		}
+ 		ast_queue_log(qe->parent->name, ast_channel_uniqueid(qe->chan), "NONE", "POS", "%d|%d|%d|%ld|%s", qe->pos, last_pos_said, qe->opos, (long) (time(NULL) - qe->start),
 			S_COR(ast_channel_caller(qe->chan)->id.number.valid, ast_channel_caller(qe->chan)->id.number.str, "<unknown>"));
 		qe->ppos = qe->pos;
-		if (qe->parent->count < 2) {
-		/* Log first call in queue, e.g. to facilitate crash detection */
-	 		ast_queue_log(qe->parent->name, ast_channel_uniqueid(qe->chan), "NONE", "FIRST", "%s", S_COR(ast_channel_caller(qe->chan)->id.number.valid, ast_channel_caller(qe->chan)->id.number.str, "<unknown>"));
-		}
+		qe->last_log = now;
 	}
 
         int pos = qe->pos + qe->parent->offset;
@@ -3232,12 +3254,12 @@ static int say_position(struct queue_ent *qe, int ringing)
 		qe->parent->holdsecs = dt / opos; /* PnD! */
 		ao2_unlock(qe->parent);
 	}
-	ast_verb(3, "XXX %s in %s position %d said %d TIME=%d HOLD=%d FREQ=%d\n",
-		ast_channel_name(qe->chan), qe->parent->name, qe->pos,  qe->last_pos_said, dt, qe->parent->holdsecs, qe->parent->announcefrequency);
+	ast_verb(3, "XXX %s in %s position %d said %d TIME=%d HOLD=%d FREQ=%d CID=%s\n",
+		ast_channel_name(qe->chan), qe->parent->name, qe->pos,  qe->last_pos_said, dt, qe->parent->holdsecs, qe->parent->announcefrequency,
+			S_COR(ast_channel_caller(qe->chan)->id.number.valid, ast_channel_caller(qe->chan)->id.number.str, "<unknown>"));
 	// </PnD!>
 
 	/* Let minannouncefrequency seconds pass between the start of each position announcement */
-	time(&now);
 	if ((now - qe->last_pos) < qe->parent->minannouncefrequency) {
 		return 0;
 	}
@@ -7287,6 +7309,7 @@ static int queue_exec(struct ast_channel *chan, const char *data)
 	qe.min_penalty = min_penalty;
 	qe.last_pos_said = sayposition;
 	qe.last_hold_said = time(NULL);
+	qe.last_log = time(NULL); /* PnD! */
 	qe.last_pos = 0;
 	qe.last_periodic_announce_time = time(NULL);
 	qe.last_periodic_announce_sound = 0;
@@ -8577,9 +8600,9 @@ static char *__queues_show(struct mansession *s, int fd, int argc, const char * 
 
 			do_print(s, fd, "   Callers: ");
 			for (qe = q->head; qe; qe = qe->next) {
-				ast_str_set(&out, 0, "      %d. %s (wait: %ld:%2.2ld, prio: %d)",
+				ast_str_set(&out, 0, "      %d. %s (wait: %ld:%2.2ld, prio: %d, enter: %d, said: %d, cid: %s)",
 					pos++, ast_channel_name(qe->chan), (long) (now - qe->start) / 60,
-					(long) (now - qe->start) % 60, qe->prio);
+					(long) (now - qe->start) % 60, qe->prio, qe->opos, qe->last_pos_said, S_COR(ast_channel_caller(qe->chan)->id.number.valid, ast_channel_caller(qe->chan)->id.number.str, "<unknown>")); /* PnD! */
 				do_print(s, fd, ast_str_buffer(out));
 			}
 		}
@@ -8930,6 +8953,7 @@ static int manager_queues_status(struct mansession *s, const struct message *m)
 			for (qe = q->head; qe; qe = qe->next) {
 				astman_append(s, "Event: QueueEntry\r\n"
 					"Queue: %s\r\n"
+					"PositionSaid: %d\r\n" /* PnD! */
 					"Position: %d\r\n"
 					"Channel: %s\r\n"
 					"Uniqueid: %s\r\n"
@@ -8940,7 +8964,7 @@ static int manager_queues_status(struct mansession *s, const struct message *m)
 					"Wait: %ld\r\n"
 					"%s"
 					"\r\n",
-					q->name, pos++, ast_channel_name(qe->chan), ast_channel_uniqueid(qe->chan),
+					q->name, qe->last_pos_said, pos++, ast_channel_name(qe->chan), ast_channel_uniqueid(qe->chan),
 					S_COR(ast_channel_caller(qe->chan)->id.number.valid, ast_channel_caller(qe->chan)->id.number.str, "unknown"),
 					S_COR(ast_channel_caller(qe->chan)->id.name.valid, ast_channel_caller(qe->chan)->id.name.str, "unknown"),
 					S_COR(ast_channel_connected(qe->chan)->id.number.valid, ast_channel_connected(qe->chan)->id.number.str, "unknown"),
@@ -9890,7 +9914,7 @@ AST_DATA_STRUCTURE(call_queue, DATA_EXPORT_CALL_QUEUE);
 	MEMBER(member, rt_uniqueid, AST_DATA_STRING)
 
 AST_DATA_STRUCTURE(member, DATA_EXPORT_MEMBER);
-// PnD! "ppos" "last_hold_said" "periodicannouncelimit"
+// PnD! "ppos" "last_hold_said" "periodicannouncelimit" "last_log"
 #define DATA_EXPORT_QUEUE_ENT(MEMBER)						\
 	MEMBER(queue_ent, moh, AST_DATA_STRING)					\
 	MEMBER(queue_ent, announce, AST_DATA_STRING)				\
@@ -9900,6 +9924,7 @@ AST_DATA_STRUCTURE(member, DATA_EXPORT_MEMBER);
 	MEMBER(queue_ent, pos, AST_DATA_INTEGER)				\
 	MEMBER(queue_ent, prio, AST_DATA_INTEGER)				\
 	MEMBER(queue_ent, last_pos_said, AST_DATA_INTEGER)			\
+	MEMBER(queue_ent, last_log, AST_DATA_INTEGER)				\
 	MEMBER(queue_ent, last_hold_said, AST_DATA_INTEGER)			\
 	MEMBER(queue_ent, last_periodic_announce_time, AST_DATA_INTEGER)	\
 	MEMBER(queue_ent, last_periodic_announce_sound, AST_DATA_INTEGER)	\
