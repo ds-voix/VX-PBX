@@ -28,8 +28,9 @@
  announce-time-limit: Say no more then X minutes
  announce-delay: Delay seconds before doing first position/time announce
  periodic-announce-limit: Play periodic announces no more then X times, X=-1 to play infinitely
+ moh-supress: Supress MOH when entering the queue. Further, there are special announce names "+" and "-" to turn MOH on/off.
 
- Added "sayposition" argument to Queue application.
+ Added "sayposition", "shiftannounce" argument to Queue application.
 */
 
 /*! \file
@@ -255,6 +256,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			</parameter>
 			<parameter name="sayposition"><!-- PnD! -->
 				<para>Fake position to be announced in some circumstances.</para>
+			</parameter>
+			<parameter name="shiftannounce"><!-- PnD! -->
+				<para>Shift first anounce to this position (0 is first).</para>
 			</parameter>
 		</syntax>
 		<description>
@@ -1189,6 +1193,7 @@ struct queue_ent {
 	int ring_when_ringing;                 /*!< Should we only use ring indication when a channel is ringing? */
 	time_t last_periodic_announce_time;    /*!< The last time we played a periodic announcement */
 	int last_periodic_announce_sound;      /*!< The last periodic announcement we made */
+	int nomoh;                             /*!< Supress MOH|Ringing */ /* PnD! */
 	time_t last_pos;                       /*!< Last time we told the user their position */
 	time_t last_log;                       /*!< Last time we logged position */ /* PnD! */
 	int last_hold_said;                    /*!< Last hold time we told */ /* PnD! */
@@ -1352,6 +1357,7 @@ struct call_queue {
 	int count;                          /*!< How many entries */
 	int maxlen;                         /*!< Max number of entries */
 	unsigned int poslog:1;              /*!< Log each position change of each queue entry (many events!) */ /* PnD! */
+	unsigned int mohsupress:1;          /*!< Supress MOH when entering the queue */ /* PnD! */
 	unsigned int backoff:1;             /*!< Supress position increasement announces, when "no". Default "yes". */ /* PnD! */
 	int offset;                         /*!< Position offset for announcements */ /* PnD! */
 	int minhold;                        /*!< Minimum hold time for calculate announcements */ /* PnD! */
@@ -2097,6 +2103,7 @@ static void init_queue(struct call_queue *q)
 	q->maxlen = 0;
 	q->offset = 0; /* PnD! */
 	q->poslog = 0; /* PnD! Default FALSE */
+	q->mohsupress = 0; /* PnD! Default FALSE */
 	q->backoff = 1; /* PnD! Default TRUE */
 	q->minhold = 30; /* PnD! no less then 30s */
 	q->announcefrequency = 0;
@@ -2435,6 +2442,8 @@ static void queue_set_param(struct call_queue *q, const char *param, const char 
 // <PnD!>
 	} else if (!strcasecmp(param, "poslog")) {
 		q->poslog = ast_true(val);
+	} else if (!strcasecmp(param, "moh-supress")) {
+		q->mohsupress = ast_true(val);
 	} else if (!strcasecmp(param, "announce-backoff")) {
 		q->backoff = ast_true(val);
 	} else if (!strcasecmp(param, "announce-time-limit")) {
@@ -3043,12 +3052,12 @@ static int join_queue(char *queuename, struct queue_ent *qe, enum queue_result *
         int pos1 = 0;
         if (qe->last_pos_said > 0) {
 		for (cur = q->head; cur; cur = cur->next) {
-        		if ((cur->last_pos_said == position) && (cur->pos > pos1)) {
+        		if (cur->last_pos_said && (cur->last_pos_said <= position) && (cur->pos > pos1)) {
         			pos1 = cur->pos;
 	        	}
 		}
-		if (pos1 >= position) {
-			ast_verb(3, "ENTER %d in %d\n",position,pos1);
+		if (pos1 && (pos1 >= position)) {
+			ast_verb(3, "ENTER %d in %d\n", position, pos1 + 1);
 			position = pos1 + 1;
 		}
 	}
@@ -3231,7 +3240,7 @@ static int say_position(struct queue_ent *qe, int ringing)
 	/* Log position to make restoration possible */
 	if (qe->parent->poslog && ((qe->pos != qe->ppos) || ((now - qe->last_log) >= 60))) {
 		int last_pos_said = qe->last_pos_said;
-		if (last_pos_said == 0) {
+		if (qe->parent->backoff || (qe->last_pos_said == 0) || (qe->pos < qe->last_pos_said)) {
 			last_pos_said = qe->pos;
 		}
  		ast_queue_log(qe->parent->name, ast_channel_uniqueid(qe->chan), "NONE", "POS", "%d|%d|%d|%ld|%s", qe->pos, last_pos_said, qe->opos, (long) (time(NULL) - qe->start),
@@ -3254,9 +3263,11 @@ static int say_position(struct queue_ent *qe, int ringing)
 		qe->parent->holdsecs = dt / opos; /* PnD! */
 		ao2_unlock(qe->parent);
 	}
+/*
 	ast_verb(3, "XXX %s in %s position %d said %d TIME=%d HOLD=%d FREQ=%d CID=%s\n",
 		ast_channel_name(qe->chan), qe->parent->name, qe->pos,  qe->last_pos_said, dt, qe->parent->holdsecs, qe->parent->announcefrequency,
 			S_COR(ast_channel_caller(qe->chan)->id.number.valid, ast_channel_caller(qe->chan)->id.number.str, "<unknown>"));
+*/
 	// </PnD!>
 
 	/* Let minannouncefrequency seconds pass between the start of each position announcement */
@@ -3429,7 +3440,7 @@ playout:
 	}
 
 	/* Don't restart music on hold if we're about to exit the caller from the queue */
-	if (!res) {
+	if (!res && !qe->nomoh) { /* PnD! */
 		if (ringing) {
 			ast_indicate(qe->chan, AST_CONTROL_RINGING);
 		} else {
@@ -4137,8 +4148,33 @@ static int say_periodic_announcement(struct queue_ent *qe, int ringing)
 		ast_moh_stop(qe->chan);
 	}
 
+	if (qe->parent->randomperiodicannounce && qe->parent->numperiodicannounce) {
+		qe->last_periodic_announce_sound = ((unsigned long) ast_random()) % qe->parent->numperiodicannounce;
+	} else if (qe->last_periodic_announce_sound >= qe->parent->numperiodicannounce ||
+		ast_str_strlen(qe->parent->sound_periodicannounce[qe->last_periodic_announce_sound]) == 0) {
+		qe->last_periodic_announce_sound = 0;
+	}
+
+// <PnD!>
+	const char *tmp;
+	tmp = ast_str_buffer(qe->parent->sound_periodicannounce[qe->last_periodic_announce_sound]);
+	if (!strcasecmp(tmp, "-")) {
+		qe->nomoh = 1;
+		qe->last_periodic_announce_sound++;
+		ast_verb(3, "Queue %s MOH supressed for %s\n", qe->parent->name, ast_channel_uniqueid(qe->chan));
+	}
+	if (!strcasecmp(tmp, "+")) {
+		qe->nomoh = 0;
+		qe->last_periodic_announce_sound++;
+		ast_verb(3, "Queue %s MOH enabled for %s\n", qe->parent->name, ast_channel_uniqueid(qe->chan));
+	}
 	ast_verb(3, "Playing periodic announcement\n");
 	qe->periodicannouncelimit--; /* PnD! */
+	tmp = ast_str_buffer(qe->parent->sound_periodicannounce[qe->last_periodic_announce_sound]);
+        if ((qe->periodicannouncelimit == 0) && (strcasecmp(tmp, "-"))) {
+		qe->nomoh = 0;
+		ast_verb(3, "Queue %s MOH enabled for %s\n", qe->parent->name, ast_channel_uniqueid(qe->chan));
+        }
 
 	if (qe->parent->randomperiodicannounce && qe->parent->numperiodicannounce) {
 		qe->last_periodic_announce_sound = ((unsigned long) ast_random()) % qe->parent->numperiodicannounce;
@@ -4146,6 +4182,7 @@ static int say_periodic_announcement(struct queue_ent *qe, int ringing)
 		ast_str_strlen(qe->parent->sound_periodicannounce[qe->last_periodic_announce_sound]) == 0) {
 		qe->last_periodic_announce_sound = 0;
 	}
+// </PnD!>
 
 	/* play the announcement */
 	res = play_file(qe->chan, ast_str_buffer(qe->parent->sound_periodicannounce[qe->last_periodic_announce_sound]));
@@ -4154,8 +4191,15 @@ static int say_periodic_announcement(struct queue_ent *qe, int ringing)
 		res = 0;
 	}
 
+// <PnD!>
+        if (qe->parent->poslog) {
+		ast_queue_log(qe->parent->name, ast_channel_uniqueid(qe->chan), "NONE", "ANNOUNCE", "%d|%d|%d|%s", qe->last_periodic_announce_sound, qe->pos, qe->last_pos_said,
+			S_COR(ast_channel_caller(qe->chan)->id.number.valid, ast_channel_caller(qe->chan)->id.number.str, "<unknown>"));
+	}
+// </PnD!>
+
 	/* Resume Music on Hold if the caller is going to stay in the queue */
-	if (!res) {
+	if (!res && !qe->nomoh) { /* PnD! */
 		if (ringing) {
 			ast_indicate(qe->chan, AST_CONTROL_RINGING);
 		} else {
@@ -4218,7 +4262,11 @@ static void rna(int rnatime, struct queue_ent *qe, char *interface, char *member
 	/* Stop ringing, and resume MOH if specified */
 	if (qe->ring_when_ringing) {
 		ast_indicate(qe->chan, -1);
-		ast_moh_start(qe->chan, qe->moh, NULL);
+// <PnD!>
+		if (!qe->nomoh) {
+			ast_moh_start(qe->chan, qe->moh, NULL);
+		}
+// </PnD!>
 	}
 
 	if (qe->parent->eventwhencalled) {
@@ -6051,8 +6099,9 @@ static int try_calling(struct queue_ent *qe, const struct ast_flags opts, char *
 			}
 		}
 		qe->handled++;
-		ast_queue_log(queuename, ast_channel_uniqueid(qe->chan), member->membername, "CONNECT", "%ld|%s|%ld", (long) (time(NULL) - qe->start), ast_channel_uniqueid(peer),
-													(long)(orig - to > 0 ? (orig - to) / 1000 : 0));
+		ast_queue_log(queuename, ast_channel_uniqueid(qe->chan), member->membername, "CONNECT", "%ld|%s|%ld|%s", (long) (time(NULL) - qe->start), ast_channel_uniqueid(peer),
+													(long)(orig - to > 0 ? (orig - to) / 1000 : 0),
+													S_COR(ast_channel_caller(qe->chan)->id.number.valid, ast_channel_caller(qe->chan)->id.number.str, "<unknown>"));
 
 		if (ast_channel_cdr(qe->chan)) {
 			struct ast_cdr *cdr;
@@ -6148,12 +6197,16 @@ static int try_calling(struct queue_ent *qe, const struct ast_flags opts, char *
 					(long) (time(NULL) - callstart), qe->opos);
 				send_agent_complete(qe, queuename, peer, member, callstart, vars, sizeof(vars), TRANSFER);
 			} else if (ast_check_hangup(qe->chan) && !ast_check_hangup(peer)) {
-				ast_queue_log(queuename, ast_channel_uniqueid(qe->chan), member->membername, "COMPLETECALLER", "%ld|%ld|%d",
-					(long) (callstart - qe->start), (long) (time(NULL) - callstart), qe->opos);
+// <PnD!>
+				ast_queue_log(queuename, ast_channel_uniqueid(qe->chan), member->membername, "COMPLETECALLER", "%ld|%ld|%d|%s",
+					(long) (callstart - qe->start), (long) (time(NULL) - callstart), qe->opos,
+					S_COR(ast_channel_caller(qe->chan)->id.number.valid, ast_channel_caller(qe->chan)->id.number.str, "<unknown>"));
 				send_agent_complete(qe, queuename, peer, member, callstart, vars, sizeof(vars), CALLER);
 			} else {
-				ast_queue_log(queuename, ast_channel_uniqueid(qe->chan), member->membername, "COMPLETEAGENT", "%ld|%ld|%d",
-					(long) (callstart - qe->start), (long) (time(NULL) - callstart), qe->opos);
+				ast_queue_log(queuename, ast_channel_uniqueid(qe->chan), member->membername, "COMPLETEAGENT", "%ld|%ld|%d|%s",
+					(long) (callstart - qe->start), (long) (time(NULL) - callstart), qe->opos,
+					S_COR(ast_channel_caller(qe->chan)->id.number.valid, ast_channel_caller(qe->chan)->id.number.str, "<unknown>"));
+// </PnD!>
 				send_agent_complete(qe, queuename, peer, member, callstart, vars, sizeof(vars), AGENT);
 			}
 			if ((tds = ast_channel_datastore_find(qe->chan, &queue_transfer_info, NULL))) {
@@ -7173,6 +7226,7 @@ static int queue_exec(struct ast_channel *chan, const char *data)
 	int makeannouncement = 0;
 	int position = 0;
 	int sayposition = 0; /* PnD! */
+	int shiftannounce = 0; /* PnD! */
 	AST_DECLARE_APP_ARGS(args,
 		AST_APP_ARG(queuename);
 		AST_APP_ARG(options);
@@ -7185,6 +7239,7 @@ static int queue_exec(struct ast_channel *chan, const char *data)
 		AST_APP_ARG(rule);
 		AST_APP_ARG(position);
 		AST_APP_ARG(sayposition); /* PnD! */
+		AST_APP_ARG(shiftannounce); /* PnD! */
 	);
 	/* Our queue entry */
 	struct queue_ent qe = { 0 };
@@ -7192,7 +7247,7 @@ static int queue_exec(struct ast_channel *chan, const char *data)
 	char *opt_args[OPT_ARG_ARRAY_SIZE];
 
 	if (ast_strlen_zero(data)) {
-		ast_log(LOG_WARNING, "Queue requires an argument: queuename[,options[,URL[,announceoverride[,timeout[,agi[,macro[,gosub[,rule[,position[,sayposition]]]]]]]]]]\n"); /* PnD! */
+		ast_log(LOG_WARNING, "Queue requires an argument: queuename[,options[,URL[,announceoverride[,timeout[,agi[,macro[,gosub[,rule[,position[,sayposition[,shiftannounce]]]]]]]]]]]\n"); /* PnD! */
 		return -1;
 	}
 
@@ -7200,7 +7255,7 @@ static int queue_exec(struct ast_channel *chan, const char *data)
 	AST_STANDARD_APP_ARGS(args, parse);
 
 /* PnD! */
-	ast_debug(1, "queue: %s, options: %s, url: %s, announce: %s, timeout: %s, agi: %s, macro: %s, gosub: %s, rule: %s, position: %s, sayposition: %s\n",
+	ast_debug(1, "queue: %s, options: %s, url: %s, announce: %s, timeout: %s, agi: %s, macro: %s, gosub: %s, rule: %s, position: %s, sayposition: %s, shiftannounce: %s\n",
 		args.queuename,
 		S_OR(args.options, ""),
 		S_OR(args.url, ""),
@@ -7211,7 +7266,8 @@ static int queue_exec(struct ast_channel *chan, const char *data)
 		S_OR(args.gosub, ""),
 		S_OR(args.rule, ""),
 		S_OR(args.position, ""),
-		S_OR(args.sayposition, ""));
+		S_OR(args.sayposition, ""),
+		S_OR(args.shiftannounce, ""));
 
 	if (!ast_strlen_zero(args.options)) {
 		ast_app_parse_options(queue_exec_options, &opts, opt_args, args.options);
@@ -7298,6 +7354,13 @@ static int queue_exec(struct ast_channel *chan, const char *data)
 			sayposition = 0;
 		}
 	}
+	if (args.shiftannounce) {
+		shiftannounce = atoi(args.shiftannounce);
+		if (shiftannounce < 0) {
+			ast_log(LOG_WARNING, "Invalid shiftannounce '%s' given for call to queue '%s'. Assuming no preference for shiftannounce\n", args.shiftannounce, args.queuename);
+			shiftannounce = 0;
+		}
+	}
 // </PnD!>
 
 	ast_debug(1, "queue: %s, expires: %ld, priority: %d\n",
@@ -7307,12 +7370,13 @@ static int queue_exec(struct ast_channel *chan, const char *data)
 	qe.prio = prio;
 	qe.max_penalty = max_penalty;
 	qe.min_penalty = min_penalty;
-	qe.last_pos_said = sayposition;
+	qe.last_pos_said = sayposition; /* PnD! */
 	qe.last_hold_said = time(NULL);
 	qe.last_log = time(NULL); /* PnD! */
 	qe.last_pos = 0;
 	qe.last_periodic_announce_time = time(NULL);
 	qe.last_periodic_announce_sound = 0;
+//	qe.nomoh = 0; /* PnD! */
 	qe.valid_digits = 0;
 	if (join_queue(args.queuename, &qe, &reason, position)) {
 		ast_log(LOG_WARNING, "Unable to join queue '%s'\n", args.queuename);
@@ -7320,7 +7384,20 @@ static int queue_exec(struct ast_channel *chan, const char *data)
 		return 0;
 	}
 	ast_assert(qe.parent != NULL);
+// <PnD!>
+        qe.nomoh = qe.parent->mohsupress;
+        qe.last_periodic_announce_sound = shiftannounce; /* PnD! */
+	if (qe.last_periodic_announce_sound >= qe.parent->numperiodicannounce) {
+		qe.last_periodic_announce_sound = 0;
+	}
 
+	if (qe.periodicannouncelimit > 0) {
+		qe.periodicannouncelimit = qe.periodicannouncelimit - qe.last_periodic_announce_sound;
+		if (qe.periodicannouncelimit < 0) {
+			qe.periodicannouncelimit = 0;
+		}
+	}
+// </PnD!>
 	ast_queue_log(args.queuename, ast_channel_uniqueid(chan), "NONE", "ENTERQUEUE", "%s|%s|%d",
 		S_OR(args.url, ""),
 		S_COR(ast_channel_caller(chan)->id.number.valid, ast_channel_caller(chan)->id.number.str, ""),
@@ -7331,7 +7408,11 @@ check_turns:
 	if (ringing) {
 		ast_indicate(chan, AST_CONTROL_RINGING);
 	} else {
-		ast_moh_start(chan, qe.moh, NULL);
+// <PnD!>
+	        if (!qe.nomoh) {
+			ast_moh_start(chan, qe.moh, NULL);
+		}
+// </PnD!>
 	}
 
 	/* This is the wait loop for callers 2 through maxlen */
@@ -9828,11 +9909,12 @@ static struct ast_cli_entry cli_queue[] = {
 };
 
 /* struct call_queue astdata mapping. */
-// PnD! "offset" "minhold" "announcetimelimit" "announcedelay" "periodicannouncelimit" "poslog" "backoff"
+// PnD! "offset" "minhold" "announcetimelimit" "announcedelay" "periodicannouncelimit" "poslog" "backoff" "mohsupress"
 #define DATA_EXPORT_CALL_QUEUE(MEMBER)					\
 	MEMBER(call_queue, name, AST_DATA_STRING)			\
 	MEMBER(call_queue, moh, AST_DATA_STRING)			\
 	MEMBER(call_queue, poslog, AST_DATA_BOOLEAN)			\
+	MEMBER(call_queue, mohsupress, AST_DATA_BOOLEAN)			\
 	MEMBER(call_queue, backoff, AST_DATA_BOOLEAN)			\
 	MEMBER(call_queue, announce, AST_DATA_STRING)			\
 	MEMBER(call_queue, context, AST_DATA_STRING)			\
@@ -9914,7 +9996,7 @@ AST_DATA_STRUCTURE(call_queue, DATA_EXPORT_CALL_QUEUE);
 	MEMBER(member, rt_uniqueid, AST_DATA_STRING)
 
 AST_DATA_STRUCTURE(member, DATA_EXPORT_MEMBER);
-// PnD! "ppos" "last_hold_said" "periodicannouncelimit" "last_log"
+// PnD! "ppos" "last_hold_said" "periodicannouncelimit" "last_log" "nomoh"
 #define DATA_EXPORT_QUEUE_ENT(MEMBER)						\
 	MEMBER(queue_ent, moh, AST_DATA_STRING)					\
 	MEMBER(queue_ent, announce, AST_DATA_STRING)				\
@@ -9928,6 +10010,7 @@ AST_DATA_STRUCTURE(member, DATA_EXPORT_MEMBER);
 	MEMBER(queue_ent, last_hold_said, AST_DATA_INTEGER)			\
 	MEMBER(queue_ent, last_periodic_announce_time, AST_DATA_INTEGER)	\
 	MEMBER(queue_ent, last_periodic_announce_sound, AST_DATA_INTEGER)	\
+	MEMBER(queue_ent, nomoh, AST_DATA_INTEGER)				\
 	MEMBER(queue_ent, last_pos, AST_DATA_INTEGER)				\
 	MEMBER(queue_ent, periodicannouncelimit, AST_DATA_INTEGER)		\
 	MEMBER(queue_ent, opos, AST_DATA_INTEGER)				\
