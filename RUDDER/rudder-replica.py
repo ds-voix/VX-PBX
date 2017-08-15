@@ -19,7 +19,7 @@
 
 """
   The code below is next step of "api.py", the reference for Rudder API implementation, written in python 2.7.
-It's now compliant with Rudder 3.2.10 .. 4.1.3. A number of the most stupid places was refactored.
+It's now compliant with Rudder 3.2.10 .. 4.1.5. A number of the most stupid places was refactored.
 
 It is as plain as I could write, so I hope it would not be difficult to pull out what You need.
 Although I hope it will be helpfull to improve Rudder's API docs https://www.rudder-project.org/rudder-api-doc/
@@ -35,16 +35,25 @@ implemented ugly workarounds will be gone with time. Regards!
 * Note the obvious unefficiency on long distances. Code must be run as close to DST as in could.
   The time to think about batch-writes.
 * Note that all transmissions are out-of-transaction. All intermediate states must be considered inconsistent!
-* Rudder's API remains inconsistent, particularly in uuid ignoring for all object except of directives.
 """
+
 """
   Replication inheritance by setting tags in "Description" fields:
 ::public:: -X- ::private::
+::public:: -X- ::protected::
 ::public:: ->- '' >> ::public::
 ::public:: ->- ::master:: >> ::master::
 ::public:: ->- ::slave:: >> ::slave::
 
+::protected:: -X- ::private::
+::protected:: -X- ::protected::
+::protected:: ->- '' >> ''
+::protected:: ->- ::public:: >> ::public::
+::protected:: ->- ::master:: >> ::master::
+::protected:: ->- ::slave:: >> ::slave::
+
 ::master:: -X- ::private::
+::master:: -X- ::protected::
 ::master:: ->- '' >> ::slave::
 ::master:: ->- ::public:: >> ::slave::
 ::master:: ->- ::master:: >> ::slave::
@@ -54,10 +63,11 @@ implemented ugly workarounds will be gone with time. Regards!
   ::private:: breaks inheritance (no any replica to ::private::),
   ::master:: provides one-level inheritance to ::slave::
   ::slave:: terminates inheritance.
+  ::protected:: protects object against rewriting, but behaves like ::public:: on source, except of remaining unchanged description.
+
 """
 """
 ToDo:
- *  Add tag-based filter to replicate non-public objects with the exact tag.
  *  Make persistent dictionary to deal with object rename|delete actions.
  *  Don't try to insert existing objects.
 """
@@ -75,6 +85,7 @@ parser.add_argument('-d', '--dst-host', dest='DstHost', required=True, help='Des
 parser.add_argument('-k', '--src-key', dest='SrcKey', required=True, help='Source server API key')
 parser.add_argument('-K', '--dst-key', dest='DstKey', required=True, help='Destination server API key')
 parser.add_argument('-E', '--empty', dest='EMPTY_OK', action='store_true', default=False, help='Although replicate records without valid labels in Description fields')
+parser.add_argument('-T', '--tag', dest='TAG', action='append', help='Only replicate records containing this tag (filter), m.b. multiple')
 
 parser.add_argument('-P', '--parameters', dest='PARAMETERS', action='store_true', default=False, help='Replicate parameters')
 parser.add_argument('-G', '--groups', dest='GROUPS', action='store_true', default=False, help='Replicate groups')
@@ -89,6 +100,8 @@ SrcKey = args.SrcKey
 
 DstHost = args.DstHost
 DstKey = args.DstKey
+
+TAGS = args.TAG
 
 EMPTY_OK = args.EMPTY_OK
 PARAMETERS = args.PARAMETERS
@@ -113,6 +126,21 @@ def dict_lr(DictL, DictR):
       if i != 'description':
         DictLR[ DictL[i] ] = DictR[i]
   return
+
+
+def tags(description):
+  global TAGS
+
+  if TAGS is None:
+    return True
+  elif len(TAGS) == 0:
+    return True
+
+  for i in TAGS:
+    if (description.find(i) >= 0):
+      return True
+
+  return False
 
 
 def get(host, token, api):
@@ -241,18 +269,25 @@ def post(api, uuid, data):
 
 
 def groups(CDict, js, parent = ''):
+  if not (parent in CDict):
+    print "* Skip sync for group \"%s\": branch filtered" % parent
+    return
+
   category = CDict[parent]
   for i in js:
+    description = i['description']
     master = (i['description'].find('::master::') >= 0)
     if master:
-      i['description'] = '::slave::'
+      description = '::slave::'
+    elif (i['description'].find('::protected::') >= 0):
+      description = ''
 
-    if (i['description'].find('::public::') >= 0) | master | (EMPTY_OK & (i['description'].find('::private::') < 0) & (i['description'].find('::slave::') < 0)):
+    if tags(i['description']) & ((i['description'].find('::public::') >= 0) | (i['description'].find('::protected::') >= 0) | master | (EMPTY_OK & (i['description'].find('::private::') < 0) & (i['description'].find('::slave::') < 0))):
       print "   ", i['id'], i['displayName']
       new = {'category' : category,
              'id' : i['id'], # Silently ignored :(~
              'displayName' : i['displayName'],
-             'description' : i['description'],
+             'description' : description,
              'dynamic' : i['dynamic'],
              'query' : i['query'],
              'enabled' : i['enabled']
@@ -266,8 +301,10 @@ def groups(CDict, js, parent = ''):
         uuid = CDict["%s||%s" % (parent, i['displayName'])]
         description = CDict['description']["%s||%s" % (parent, i['displayName'])]
 
-        if description.find('::private::') >= 0:
+        if (description.find('::private::') >= 0) | (description.find('::protected::') >= 0):
           continue # Don't touch private groups
+        elif (i['description'].find('::protected::') >= 0):
+          new['description'] = description # ::protected:: does not affect description
         elif (description.find('::master::') >= 0) & (not master):
           new['description'] = description # Don't change master description if ::public:: on the left
         elif description.find('::slave::') >= 0:
@@ -279,7 +316,8 @@ def groups(CDict, js, parent = ''):
 #        print "  ~%s updated" % uuid
       else:
         print "  UNKNOWN ERROR %s with group \"%s\"" % (uuid, i['displayName'])
-
+    else:
+      print "* Skip sync for group \"%s\": group filtered" % parent
   return
 
 
@@ -295,16 +333,21 @@ def group_categories(CDict, js, parent = ''):
 
     parent = ("%s|%s" % (parent, js['name'])).lstrip('|')
 
+    description = js['description']
     master = (js['description'].find('::master::') >= 0)
     if master:
       js['description'] = '::slave::'
+    elif (js['description'].find('::protected::') >= 0):
+      description = ''
 
     if js['id'] != 'GroupRoot':
-      if (js['description'].find('::public::') >= 0) | master | (EMPTY_OK & (js['description'].find('::private::') < 0) & (js['description'].find('::slave::') < 0)):
+      if tags(js['description']) & ((js['description'].find('::public::') >= 0) | (js['description'].find('::protected::') >= 0) | master | (EMPTY_OK & (js['description'].find('::private::') < 0) & (js['description'].find('::slave::') < 0))):
         print js['id'], "\"%s\"" % js['name'], "parent=%s" % parent
+        if (js['description'].find('::protected::') >= 0):
+          js['description'] = ''
         new = {'parent' : category,
                'name' : js['name'],
-               'description' : js['description']
+               'description' : description
               }
         uuid = put('groups/categories?prettify=true', json.dumps(new) )
 
@@ -316,8 +359,10 @@ def group_categories(CDict, js, parent = ''):
           uuid = CDict[parent]
           description = CDict['description'][parent]
 
-          if description.find('::private::') >= 0:
+          if (description.find('::private::') >= 0) | (description.find('::protected::') >= 0):
             return # Don't touch private branches
+          elif (js['description'].find('::protected::') >= 0):
+            new['description'] = description # ::protected:: does not affect description
           elif (description.find('::master::') >= 0) & (not master):
             js['description'] = description # Don't change master description if ::public:: on the left
           elif description.find('::slave::') >= 0:
@@ -338,9 +383,9 @@ def group_categories(CDict, js, parent = ''):
 def categories_groups(CDict, js, parent = ''):
   if 'categories' in js:
     parent = ("%s|%s" % (parent, js['name'])).lstrip('|')
-    print js['id'], "\"%s\"" % js['name'], "parent=%s" % parent, "parent_id=%s" % CDict[parent]
+    print js['id'], "\"%s\"" % js['name'], "parent=%s" % parent   #, "parent_id=%s" % CDict[parent]
 
-    if 'groups' in js:
+    if ('groups' in js):
       if js['id'] != 'SystemGroups': # Embedded groups are unmutable
         groups(CDict, js['groups'], parent)
 
@@ -377,20 +422,27 @@ def parameters(js1, js2):
     P[ i['id'] ] = i['description']
 
   for i in js1:
+    description = i['description']
     master = (i['description'].find('::master::') >= 0)
     if master:
-      i['description'] = '::slave::'
+      description = '::slave::'
+    elif (i['description'].find('::protected::') >= 0):
+      description = ''
 
-    if (i['description'].find('::public::') >= 0) | master | (EMPTY_OK & (i['description'].find('::private::') < 0) & (i['description'].find('::slave::') < 0)):
-      uuid = put('parameters', json.dumps(i))
+    if tags(i['description']) & ((i['description'].find('::public::') >= 0) | (i['description'].find('::protected::') >= 0) | master | (EMPTY_OK & (i['description'].find('::private::') < 0) & (i['description'].find('::slave::') < 0))):
+      j = i   # Make copy for put
+      j['description'] = description
+      uuid = put('parameters', json.dumps(j))
 
       if len(str(uuid)) >1: # New uuid
         print "New parameter \"%s\" = \"%s\"" % (i['id'], i['value'])
 
       elif uuid == 1: # Update
         uuid = i.pop('id')
-        if P[uuid].find('::private::') >= 0:
+        if (P[uuid].find('::private::') >= 0) | (P[uuid].find('::protected::') >= 0):
           continue # Don't touch private parameters
+        elif (i['description'].find('::protected::') >= 0):
+          i['description'] = P[uuid]  # ::protected:: does not affect description
         elif (P[uuid].find('::master::') >= 0) & (not master):
           i['description'] = P[uuid] # Don't change master description if ::public:: on the left
         elif P[uuid].find('::slave::') >= 0:
@@ -530,6 +582,11 @@ def directive_dict(CDict, js):
   for i in js:
     CDict["DIRECTIVE::%s||%s" % (i['techniqueName'], i['displayName'])] = i['id']
     CDict['description']["DIRECTIVE::%s||%s" % (i['techniqueName'], i['displayName'])] = i['longDescription']
+    # Directive conversion dongle
+    if i['techniqueName'] == 'aptPackageInstallation_1':
+      i['techniqueName'] = 'packageManagement'
+      CDict["DIRECTIVE::%s||%s" % (i['techniqueName'], i['displayName'])] = i['id']
+      CDict['description']["DIRECTIVE::%s||%s" % (i['techniqueName'], i['displayName'])] = i['longDescription']
   return
 
 
@@ -537,11 +594,14 @@ def directives(CDict, js):
   addDict = 0
 
   for i in js:
+    description = i['longDescription']
     master = (i['longDescription'].find('::master::') >= 0)
     if master:
-      i['longDescription'] = '::slave::'
+      description = '::slave::'
+    elif (i['longDescription'].find('::protected::') >= 0):
+      description = ''
 
-    if (i['longDescription'].find('::public::') >= 0) | master | (EMPTY_OK & (i['longDescription'].find('::private::') < 0) & (i['longDescription'].find('::slave::') < 0)):
+    if tags(i['longDescription']) & ((i['longDescription'].find('::public::') >= 0) | (i['longDescription'].find('::protected::') >= 0) | master | (EMPTY_OK & (i['longDescription'].find('::private::') < 0) & (i['longDescription'].find('::slave::') < 0))):
 #      i.pop('techniqueVersion') # Assume to use the latest one # Crashes rudder in case of significant technique mismatch
 #      print json.dumps(i, indent=2, separators=(',', ': '))
       if i['techniqueName'] == 'aptPackageInstallation_1':
@@ -555,7 +615,9 @@ def directives(CDict, js):
         pass
 
 #      print json.dumps(i, indent=2, sort_keys=False, separators=(',', ': '))
-      uuid = put('directives', json.dumps(i))
+      j = i   # Make copy for put
+      j['longDescription'] = description
+      uuid = put('directives', json.dumps(j))
       if len(str(uuid)) == 36: # New uuid
         CDict["DIRECTIVE::%s||%s" % (i['techniqueName'], i['displayName'])] = uuid
         print "New directive %s::%s = \"%s\"" % (i['techniqueName'], i['id'], i['displayName'])
@@ -563,8 +625,10 @@ def directives(CDict, js):
         uuid = i.pop('id')
         description = CDict['description']["DIRECTIVE::%s||%s" % (i['techniqueName'], i['displayName'])]
 
-        if description.find('::private::') >= 0:
+        if (description.find('::private::') >= 0) | (description.find('::protected::') >= 0):
           continue # Don't touch private directives
+        elif (i['longDescription'].find('::protected::') >= 0):
+          i['longDescription'] = description # ::protected:: does not affect description
         elif (description.find('::master::') >= 0) & (not master):
           i['longDescription'] = description # Don't change master description if ::public:: on the left
         elif description.find('::slave::') >= 0:
@@ -593,16 +657,19 @@ def r_categories(CDict, js, parent = ''):
     parent = ("%s|%s" % (parent, js['name'])).lstrip('|')
     print parent
 
+    description = js['description']
     master = (js['description'].find('::master::') >= 0)
     if master:
       js['description'] = '::slave::'
+    elif (js['description'].find('::protected::') >= 0):
+      description = ''
 
     if js['id'] != 'rootRuleCategory':
       print js['id'], js['description']
-      if (js['description'].find('::public::') >= 0) | master | (EMPTY_OK & (js['description'].find('::private::') < 0) & (js['description'].find('::slave::') < 0)):
+      if tags(js['description']) & ((js['description'].find('::public::') >= 0) | (js['description'].find('::protected::') >= 0) | master | (EMPTY_OK & (js['description'].find('::private::') < 0) & (js['description'].find('::slave::') < 0))):
         print js['id'], "\"%s\"" % js['name'], "parent=%s" % parent
 #        print "PARENT = \"%s\"" % category
-        uuid = put('rules/categories?prettify=true', json.dumps({'name': js['name'], 'parent': category, 'description': js['description']}) )
+        uuid = put('rules/categories?prettify=true', json.dumps({'name': js['name'], 'parent': category, 'description': description}) )
 
         if len(str(uuid)) == 36: # New uuid
           CDict[parent] = uuid
@@ -611,8 +678,10 @@ def r_categories(CDict, js, parent = ''):
           uuid = CDict[parent]
           description = CDict['description'][parent]
 
-          if description.find('::private::') >= 0:
+          if (description.find('::private::') >= 0) | (description.find('::protected::') >= 0):
             return # Don't touch private branches
+          elif (js['description'].find('::protected::') >= 0):
+            js['description'] = description # ::protected:: does not affect description
           elif (description.find('::master::') >= 0) & (not master):
             js['description'] = description # Don't change master description if ::public:: on the left
           elif description.find('::slave::') >= 0:
@@ -631,37 +700,71 @@ def r_categories(CDict, js, parent = ''):
 
 ### 8. Rules
 def rules(CDict, js, parent = ''):
-  global DictLR # (directives & targets) to be translated!!!
+  global DictLR   # (directives & targets) to be translated!!!
+  global DictL    # Reference for error handling
+
+  if not (parent in CDict):
+    print "* Skip sync for group \"%s\": branch filtered" % parent
+    return
+
   category = CDict[parent]
   for i in js:
+    description = i['longDescription']
     master = (i['longDescription'].find('::master::') >= 0)
     if master:
-      i['longDescription'] = '::slave::'
+      description = '::slave::'
+    elif (i['longDescription'].find('::protected::') >= 0):
+      description = ''
 
-    if (i['longDescription'].find('::public::') >= 0) | master | (EMPTY_OK & (i['longDescription'].find('::private::') < 0) & (i['longDescription'].find('::slave::') < 0)):
+    if tags(i['longDescription']) & ((i['longDescription'].find('::public::') >= 0) | (i['longDescription'].find('::protected::') >= 0) | master | (EMPTY_OK & (i['longDescription'].find('::private::') < 0) & (i['longDescription'].find('::slave::') < 0))):
       print "   ", i['id'], i['displayName']
 
       for x, j in enumerate(i['directives']):
-        i['directives'][x] = DictLR[j]
+        try:
+          i['directives'][x] = DictLR[j]
+        except:
+          print "Fatal: missing DictLR for directive \"%s\"" % i['directives'][x]   # ['displayName']
+          for k, v in DictL.iteritems():   # Find key by value (uuid)
+            if v == i['directives'][x]:
+              print k
+          sys.exit(1)
 
-      print ">>> exclude: %s" % i['targets'][0]['exclude']['or']
-      print ">>> include: %s" % i['targets'][0]['include']['or']
+#      print ">>> exclude: %s" % i['targets'][0]['exclude']['or']
+#      print ">>> include: %s" % i['targets'][0]['include']['or']
+#      print "@@@ ", i['targets']
+      exclude = []
       for x, j in enumerate(i['targets'][0]['exclude']['or']):
         if j.find('group:') == 0:
           s = j.split(':')[1]
-          i['targets'][0]['exclude']['or'][x] = "group:%s" % DictLR[s]
-          print "@@@ ", i['targets']
+          if s in DictLR:
+            exclude.append("group:%s" % DictLR[s])
+          else:
+            print "* Skip exclude for group \"%s\": group filtered" % s
+        else:
+          print "* Exclude special group \"%s\"" % i['targets'][0]['exclude']['or'][x]
+          exclude.append(i['targets'][0]['exclude']['or'][x])
+
+      i['targets'][0]['exclude']['or'] = exclude
+
+      include = []
       for x, j in enumerate(i['targets'][0]['include']['or']):
         if j.find('group:') == 0:
           s = j.split(':')[1]
-          i['targets'][0]['include']['or'][x] = "group:%s" % DictLR[s]
-          print "@@@ ", i['targets']
+          if s in DictLR:
+            include.append("group:%s" % DictLR[s])
+          else:
+            print "* Skip include for group \"%s\": group filtered" % s
+        else:
+          print "* Include special group \"%s\"" % i['targets'][0]['include']['or'][x]
+          include.append(i['targets'][0]['include']['or'][x])
+
+      i['targets'][0]['include']['or'] = include
 
       new = {'category' : category,
              'id' : i['id'],
              'displayName' : i['displayName'],
              'shortDescription' : i['shortDescription'],
-             'longDescription' : i['longDescription'],
+             'longDescription' : description,
              'enabled' : i['enabled'],
              'directives' : i['directives'],
              'targets' : i['targets'] ### Must be converted to dst-groups uuid's
@@ -675,12 +778,14 @@ def rules(CDict, js, parent = ''):
         uuid = CDict["%s||%s" % (parent, i['displayName'])]
         description = CDict['description']["%s||%s" % (parent, i['displayName'])]
 
-        if description.find('::private::') >= 0:
+        if (description.find('::private::') >= 0) | (description.find('::protected::') >= 0):
           continue # Don't touch private groups
+        elif (i['longDescription'].find('::protected::') >= 0):
+          new['longDescription'] = description # ::protected:: does not affect description
         elif (description.find('::master::') >= 0) & (not master):
-          new['description'] = description # Don't change master description if ::public:: on the left
+          new['longDescription'] = description # Don't change master description if ::public:: on the left
         elif description.find('::slave::') >= 0:
-          new['description'] = description # Don't change slave description
+          new['longDescription'] = description # Don't change slave description
 
         new.pop('category')
         new.pop('id')
@@ -695,7 +800,7 @@ def rules(CDict, js, parent = ''):
 def categories_rules(CDict, js, parent = ''):
   if 'categories' in js:
     parent = ("%s|%s" % (parent, js['name'])).lstrip('|')
-    print js['id'], "\"%s\"" % js['name'], "parent=%s" % parent, "parent_id=%s" % CDict[parent]
+    print js['id'], "\"%s\"" % js['name'], "parent=%s" % parent   #, "parent_id=%s" % CDict[parent]
 
     if 'rules' in js:
       rules(CDict, js['rules'], parent)
@@ -705,15 +810,37 @@ def categories_rules(CDict, js, parent = ''):
 
   return
 
-### def MAIN ###
-if GROUPS | ALL:
-  ### ##1. Src group categories >> Dst
-  print "##1. Src group categories >> Dst"
+
+def GROUPS_DICT():
+  global DictL
+  global DictR
+
+  print "Preparing groups dictionaries..."
   js1 = get(SrcHost, SrcKey, 'groups/tree')
   category_dict('groups', DictL, js1['data']['groupCategories']) # Left group categories
 
   js2 = get(DstHost, DstKey, 'groups/tree')
   category_dict('groups', DictR, js2['data']['groupCategories'])
+  return js1
+
+
+def DIRECTIVES_DICT():
+  global DictL
+  global DictR
+
+  print "Preparing directives dictionaries..."
+  js1 = get(SrcHost, SrcKey, 'directives')
+  directive_dict(DictL, js1['data']['directives'])
+
+  js2 = get(DstHost, DstKey, 'directives')
+  directive_dict(DictR, js2['data']['directives'])
+  return js1
+
+### def MAIN ###
+if GROUPS | ALL:
+  ### ##1. Src group categories >> Dst
+  print "##1. Src group categories >> Dst"
+  js1 = GROUPS_DICT()
 
   group_categories(DictR, js1['data']['groupCategories'])
   print ""
@@ -737,17 +864,22 @@ if PARAMETERS | ALL:
 ### ##4. Create/update dst directives
 if DIRECTIVES | ALL:
   print "##4. Create/update dst directives"
-  js1 = get(SrcHost, SrcKey, 'directives')
-  directive_dict(DictL, js1['data']['directives'])
+  if not (GROUPS | ALL):
+    GROUPS_DICT()
 
-  js2 = get(DstHost, DstKey, 'directives')
-  directive_dict(DictR, js2['data']['directives'])
+  js1 = DIRECTIVES_DICT()
 
   directives(DictR, js1['data']['directives'])
   print ""
 
 
 if RULES | ALL:
+  if not (GROUPS | ALL):
+    GROUPS_DICT()
+
+  if not (DIRECTIVES | ALL):
+    DIRECTIVES_DICT()
+
   ### ##5. Src rule categories >> Dst
   print "##5. Src rule categories >> Dst (if absent)"
   js1 = get(SrcHost, SrcKey, 'rules/tree')
