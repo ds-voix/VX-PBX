@@ -1,7 +1,7 @@
 #!/usr/bin/perl
 
-# VX v0.55 block-schema definition language translator for VX-PBX platform
-# Copyright (C) 2014-2015 Dmitry Svyatogorov ds@vo-ix.ru
+# VX v0.7 block-schema definition language translator for VX-PBX platform
+# Copyright (C) 2014-2017 Dmitry Svyatogorov ds@vo-ix.ru
 
 #    This program is free software: you can redistribute it and/or modify
 #    it under the terms of the GNU Affero General Public License as
@@ -71,7 +71,7 @@ sub FN { # Function name constructor ::FN(position)
 }
 
 sub ON { # [OBJECT] name constructor ::ON
- my $_ = uc(shift) // 'ROOT';
+ $_ = uc(shift) // 'ROOT';
  my $label = shift // '';
  my $o1 = '';
  my $s = '';
@@ -93,7 +93,7 @@ sub ON { # [OBJECT] name constructor ::ON
 }
 
 sub FL { # Format numeric|alphanumeric label
- my $_ = uc(shift) // 'ROOT';
+ $_ = uc(shift) // 'ROOT';
  my $label = shift // '';
  my $numeric = shift;
 
@@ -196,13 +196,21 @@ sub Config {
     } else {
      if ($OBJECT !~ '^(ROOT|ACTION|LEVEL)$') {
       if ($value ne '') {
-       $Fields{"$OBJECT.$LABEL.$key"} = $value;
+       if ($value =~ m/^\s*((["][^"]*["])|(['][^']*['])|([^"';#]+))+/p) {
+        $value = unquote(trim(${^MATCH}));
+       }
+#       print "$OBJECT.$LABEL.$key = $value\n";
+       $Fields{"$OBJECT.$LABEL.$key"} .= $value;
       } else {
        delete $Fields{"$OBJECT.$LABEL.$key"};
       }
      } else {
       if ($value ne '') {
-       $Fields{"ROOT.$key"} = $value;
+       if ($value =~ m/^\s*((["][^"]*["])|(['][^']*['])|([^"';#]+))+/p) {
+        $value = unquote(trim(${^MATCH}));
+       }
+#       print "ROOT.$key = $value\n";
+       $Fields{"ROOT.$key"} .= $value;
       } else {
        delete $Fields{"ROOT.$key"};
       }
@@ -219,7 +227,7 @@ sub Config {
 
 sub Action {
  return if $OBJECT =~ /^DIAL|EXT|MENU$/ && $oi >= 0; # Only built-in actions!
- my $_ = shift;
+ $_ = shift;
  my $descr = shift;
  my $inline;
 
@@ -247,7 +255,7 @@ sub Action {
 }
 
 sub NewSection {
- my $_ = shift; # String
+ $_ = shift; # String
 
  my @k = (); # Section >> keys
  &Keys($_,\@k);
@@ -313,7 +321,7 @@ sub NewSection {
 }
 
 sub Object {
- my $_ = shift; # String
+ $_ = shift; # String
 
  Action($ACTION) if defined($ACTION);
  return if (/^ROOT|^\*/);
@@ -325,6 +333,7 @@ sub Object {
  my @k = (); # Section >> keys
  &Keys($_,\@k);
  $_ = uc(shift @k);
+# print "@k\n";
 
  if (defined(&{"$_"})) {
   my $SUB = \&$_;
@@ -337,21 +346,24 @@ sub Object {
  return;
 }
 
-sub Keys { # Space-separated
- my $_ = shift;
+sub Keys { # Space|comma-separated
+ $_ = shift;
  my $k = shift; # Array reference
 
 # while (/(^[\s\t]*[^'"\s\t]+)|^[\s\t"]+([^"]|\\\")*[\s\t]*[^\\]?["]+|^[\s\t]*[']([^']|\\\')*[^\\]?[']([\s]+|$)/p) {
- while (/^[\s]*((\'.*?(?<!\\)\')|(\".*?(?<!\\)\")|[^'"\s]+)([\s]+|$)/p) {
-  push (@{$k}, trim(${^MATCH}));
+ while (/^[\s]*[,]?((\'.*?(?<!\\)\')|(\".*?(?<!\\)\")|[^'"\s,]+)([\s]*[\s,]|$)/p) {
+  my $next = ${^POSTMATCH};
+  my $key = trim(${^MATCH});
+  $key =~ s/[ ,]+$//;
+  push (@{$k}, $key);
 #  print "***${^MATCH}***\n";
-  $_ = ${^POSTMATCH};
+  $_ = $next;
  }
  return;
 }
 
 sub CSV { # Comma-separated
- my $_ = shift;
+ $_ = shift;
  my $k = shift; # Array reference
  my $c = shift // ','; # Field separator
 
