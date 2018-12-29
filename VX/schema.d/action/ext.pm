@@ -24,9 +24,9 @@ sub ext {
  if (defined $ext) {
   print " Macro = Switch ; (fn,Var,Limit,FallBack)\n";
   print " P1 = Exten($ext)\n";
-  if (defined $::Fields{"ROOT.CallLimit"} && $::Fields{"ROOT.CallLimit"} =~ /^\d+$/) {
-   print " P3 = " . $::Fields{"ROOT.CallLimit"} . "\n";
-   delete $::Fields{"ROOT.CallLimit"};
+  if (defined $::Fields{"ROOT.calllimit"} && $::Fields{"ROOT.calllimit"} =~ /^\d+$/) {
+   print " P3 = " . $::Fields{"ROOT.calllimit"} . "\n";
+   delete $::Fields{"ROOT.calllimit"};
   }
  } else {
   print "; Exten not defined!";
@@ -55,7 +55,7 @@ sub EXT { # Declare extension
    $val //= '';
    my $key = ${^POSTMATCH};
 
-   next if ($key =~/^Transfer/);
+   next if ($key =~/^transfer/);
 #   if ($key =~/^Transfer/) {
 #    my @k = ();
 #    ::Keys($::Fields{$_},\@k);
@@ -69,7 +69,9 @@ sub EXT { # Declare extension
 #     $i++;
 #    }
 #   }
-   print " $key = $val\n";
+
+###   print " $key = $val\n";
+   print " Timeout = $val\n" if ("$key" eq 'timeout');
   }
  }
 
@@ -77,47 +79,60 @@ sub EXT { # Declare extension
  my @act = ();
  my @lb = ();
 
- my $TransferOnBusy = $::Fields{"EXT.$::LABEL.TransferOnBusy"};
- my $TransferOnTimeout = $::Fields{"EXT.$::LABEL.TransferOnTimeout"};
- my $TransferCall = $::Fields{"EXT.$::LABEL.TransferCall"};
+ my $TransferOnBusy = $::Fields{"EXT.$::LABEL.transferonbusy"};
+ my $TransferOnTimeout = $::Fields{"EXT.$::LABEL.transferontimeout"};
+ my $TransferCall = $::Fields{"EXT.$::LABEL.transfercall"};
+ my $SpawnCalls = $::Fields{"EXT.$::LABEL.spawncalls"};
  my @k = ();
  my $val;
 
  if (defined $TransferOnBusy) {
   ::Keys($TransferOnBusy,\@k);
   if ($k[0] eq 'ext') {
-   $val = $k[1];
+   $val = $k[1] // '';
   } else { # Take current extension label, add mnemonic suffix
-   $::LABELS{"EXT.TransferOnBusy"} = ::FN() . '.B'; # Rewrite!
+   $::LABELS{"EXT.transferonbusy"} = ::FN() . '.B'; # Rewrite!
    push(@act, $TransferOnBusy);
-   push(@lb, "TransferOnBusy");
-   $val = $::LABELS{"EXT.TransferOnBusy"};
+   push(@lb, "transferonbusy");
+   $val = $::LABELS{"EXT.transferonbusy"};
   }
   print " TransferOnBusy = $val\n";
  }
  if (defined $TransferOnTimeout) {
   ::Keys($TransferOnTimeout,\@k);
   if ($k[0] eq 'ext') {
-   $val = $k[1];
+   $val = $k[1] // '';
   } else {
-   $::LABELS{"EXT.TransferOnTimeout"} = ::FN() . '.T'; # Rewrite!
+   $::LABELS{"EXT.transferontimeout"} = ::FN() . '.T'; # Rewrite!
    push(@act, $TransferOnTimeout);
-   push(@lb, "TransferOnTimeout");
-   $val = $::LABELS{"EXT.TransferOnTimeout"};
+   push(@lb, "transferontimeout");
+   $val = $::LABELS{"EXT.transferontimeout"};
   }
   print " TransferOnTimeout = $val\n";
  }
  if (defined $TransferCall) {
   ::Keys($TransferCall,\@k);
   if ($k[0] eq 'ext') {
-   $val = $k[1];
+   $val = $k[1] // '';
   } else {
-   $::LABELS{"EXT.TransferCall"} = ::FN() . '.X'; # Rewrite!
+   $::LABELS{"EXT.transfercall"} = ::FN() . '.X'; # Rewrite!
    push(@act, $TransferCall);
-   push(@lb, "TransferCall");
-   $val = $::LABELS{"EXT.TransferCall"};
+   push(@lb, "transfercall");
+   $val = $::LABELS{"EXT.transfercall"};
   }
   print " TransferCall = $val\n";
+ }
+ if (defined $SpawnCalls) { # No "SpawnCalls" object really defined at this time!!!
+  ::Keys($SpawnCalls,\@k);
+  if ($k[0] eq 'ext') {
+   $val = $k[1] // '';
+  } else {
+   $::LABELS{"EXT.spawncalls"} = ::FN() . '.X'; # Rewrite!
+   push(@act, $SpawnCalls);
+   push(@lb, "spawncalls");
+   $val = $::LABELS{"EXT.spawncalls"};
+  }
+  print " SpawnCalls = $val\n";
  }
 
  print "\n";

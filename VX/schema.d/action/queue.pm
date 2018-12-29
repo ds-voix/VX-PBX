@@ -27,6 +27,7 @@ sub queue {
  my $label = "QUEUE.$p[0]";
 
  my $bind = '';
+# print "*** $::DID\n";
  $bind = "$::BIND/" if ($::BIND ne '' && uc($::BIND) ne 'NULL');
 
  if (defined $::Fields{"$label.hello"}) {
