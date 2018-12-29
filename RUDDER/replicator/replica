@@ -1,0 +1,111 @@
+#!/bin/bash
+# Run LOCAL "rule-replace" for hosts in dst[] array, rules in path[] array.
+# * Calling replicas from local to remote host takes a long time at long distances!
+
+if [ -z "$1" ]; then
+  if [ -z "$RULE" ]; then
+    echo -e "\e[35m     Rule list must be set.\e[00m"
+    echo "Usage: [INIT|HOST=host.name.url] [RULE=\"/path/to/rule name\"] $0 <rule_config> [host_config]"
+    echo "Examlpes:
+  $0 deb   # use /etc/replica/rule/deb.conf with default hosts
+  $0 unb main   # use /etc/replica/rule/unb.conf and /etc/replica/host/main.conf
+  INIT=rudder.xxx.local RULE=\"NET/unb: Unbound 1.6\" $0   # Initial replica of new rule
+  HOST=rudder.xxx.local RULE=\"NET/unb: Unbound 1.6\" $0   # Exact this one rule replica to the exact host"
+    exit
+  fi
+
+else
+  # Set dst[*]
+  if [ -n "$2" ]; then
+    host="/etc/replica/host/$2.conf"
+    if [ -f "${host}" ]; then
+      . "${host}"
+    else
+      echo "Host config not found: \"${host}\""
+      exit 1
+    fi
+  fi
+
+  # Set path[*] and m.b. default dst[*], if second argument is empty
+  rule="/etc/replica/rule/$1.conf"
+  if [ -f "${rule}" ]; then
+    . "${rule}"
+  else
+    echo "Rule config not found: \"${rule}\""
+    exit 1
+  fi
+fi
+
+# Rewrite dst[*] and path[*] if variables are set
+if [ -n "${INIT}" ]; then
+  dst=("${INIT}")
+fi
+
+if [ -n "${HOST}" ]; then
+  dst=("${HOST}")
+fi
+
+if [ -n "${RULE}" ]; then
+  path=("${RULE}")
+fi
+
+
+if [ ${#dst[@]} -eq 0 ]; then
+  echo "Host list is empty. Nothing to do."
+  exit 1
+fi
+
+if [ ${#path[@]} -eq 0 ]; then
+  echo "Rule list is empty. Nothing to do."
+  exit 1
+fi
+
+############ REPLICA ############
+for rule in "${path[@]}"; do
+  echo -e "\e[35m
+>>> Rule = \"${rule}\" <<<\e[00m"
+
+  i=0
+  dir=`mktemp -d --tmpdir=/tmp/ rule-replace.XXXXXXXXXX`
+  for host in "${dst[@]}"; do
+    if [ $i -gt 0 ]; then # Log to file
+      echo -e "\e[36m
+>>> Host = \"${host}\" <<<\e[00m" >> "/${dir}/${host}.log"
+      if [ -n "${INIT}" ]; then
+        echo "*** Initial replica for \"${host}\""
+        INIT=1 SRC=localhost DST="${host}" rule-replace "${rule}" >> "/${dir}/${host}.log" 2>&1 &
+      else
+        # DELETE=1 # No, may lead to deletion of uncleared rule|directive in case of interruption!
+        CLEAN=1 SRC=localhost DST="${host}" rule-replace "${rule}" >> "/${dir}/${host}.log" 2>&1 &
+      fi
+    else # Log directly to console
+      echo -e "\e[36m
+>>> Host = \"${host}\" <<<\e[00m"
+      (
+        if [ -n "${INIT}" ]; then
+          echo "*** Initial replica for \"${host}\""
+          INIT=1 SRC=localhost DST="${host}" rule-replace "${rule}"
+        else
+          # DELETE=1 # No, may lead to deletion of uncleared rule|directive in case of interruption!
+          CLEAN=1 SRC=localhost DST="${host}" rule-replace "${rule}"
+        fi
+
+        echo -e "\e[34m
+...Waiting for all host tasks to be completed...\e[00m"
+      ) 2>&1 &
+    fi
+    if [ $? -ne 0 ]; then
+      echo "!!! Error occured. Aborting!"
+      exit 255
+    fi
+    pids[$((i++))]=$!
+  done
+
+  for pid in ${pids[*]}; do
+    wait $pid
+  done
+  [ `ls -1 "${dir}" | wc -l` -gt 0 ] && cat "${dir}"/*
+
+  # Don't trap this on exit, as it can be used to debug faults
+  rm -Rf "${dir}"
+done

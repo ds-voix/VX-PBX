@@ -1,0 +1,850 @@
+#!/usr/bin/python -u
+# -*- coding: utf-8 -*-
+
+# Rudder (http://www.rudder-project.org/) rule management via REST API
+# Copyright (C) 2018 Dmitry Svyatogorov ds@vo-ix.ru
+
+#    This program is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU Affero General Public License as
+#    published by the Free Software Foundation, either version 3 of the
+#    License, or (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU Affero General Public License for more details.
+#
+#    You should have received a copy of the GNU Affero General Public License
+#    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+import sys
+import os
+import time
+import urllib, urllib2
+import ssl
+import json
+
+import argparse
+parser = argparse.ArgumentParser(add_help=False, description='Rudder (SrcHost >> DstHost) rule transmission and management via REST API.')
+parser.add_argument('-?', '--help', action='help')#, help='show this help message and exit')
+#  parser.print_help()
+parser.add_argument('-h', '--src-host', dest='SrcHost', required=False, default='', help='Source Rudder server')
+parser.add_argument('-H', '--dst-host', dest='DstHost', required=True, help='Destination Rudder server')
+parser.add_argument('-k', '--src-key', dest='SrcKey', required=False, default='', help='Source server API key')
+parser.add_argument('-K', '--dst-key', dest='DstKey', required=True, help='Destination server API key')
+
+parser.add_argument('-d', '--delete', dest='DeleteId', required=False, default='', help='Rule id to be deleted, together with it\'s directives')
+parser.add_argument('-i', '--srcinfo', dest='SrcInfoPath', required=False, default='', help='Slash-separated "Path/to/Source/rule name": find and show UUID')
+parser.add_argument('-I', '--dstinfo', dest='DstInfoPath', required=False, default='', help='Slash-separated "Path/to/Target/rule name": find and show UUID')
+parser.add_argument('-ig', '--srcgroup', dest='SrcInfoGroup', required=False, default='', help='Slash-separated "Path/to/Source/group name": find and show group UUID and it\'s rules')
+parser.add_argument('-IG', '--dstgroup', dest='DstInfoGroup', required=False, default='', help='Slash-separated "Path/to/Target/group name": find and show group UUID and it\'s rules')
+parser.add_argument('-m', '--move-from', dest='SourceRuleId', required=False, default='', help='Move group FROM this rule')
+parser.add_argument('-M', '--move-to', dest='DestinationRuleId', required=False, default='', help='Move group TO this rule')
+parser.add_argument('-o', '--orphan', dest='FindOrphanDirectives', action='store_true', required=False, default=False, help='Find "orphans" (directives that are not applied in rules)')
+parser.add_argument('-r', '--rename', dest='RenameId', required=False, default='', help='Rule id to be renamed with Prefix, together with it\'s directives')
+parser.add_argument('-s', '--send', dest='SendId', required=False, default='', help='Rule id to be transferred from SrcHost, together with it\'s directives')
+parser.add_argument('-t', '--target-path', dest='TargetPath', required=False, default='', help='Slash-separated "Path/to/target/rule name", default is source path')
+
+parser.add_argument('-g', '--group', dest='MoveGroups', required=False, default='', help='Comma-saparated *INCLUDE* group IDs to be moved from old to new rule. Use \"*\" to move ALL groups')
+parser.add_argument('-G', '--xgroup', dest='CopyExcludeGroups', required=False, default='', help='Comma-saparated *EXCLUDE* group IDs to be *COPIED* from old to new rule. Use \"*\" to copy ALL groups')
+parser.add_argument('-p', '--prefix', dest='Prefix', required=False, default='#old ', help='Rename rule adding this Prefix , together with it\'s directives. Default="#old "')
+
+args = parser.parse_args()
+
+SrcHost = args.SrcHost
+SrcKey = args.SrcKey
+
+DstHost = args.DstHost
+DstKey = args.DstKey
+
+DeleteId = args.DeleteId
+# Rule info
+SrcInfoPath = args.SrcInfoPath
+DstInfoPath = args.DstInfoPath
+# Group info
+SrcInfoGroup = args.SrcInfoGroup
+DstInfoGroup = args.DstInfoGroup
+FindOrphanDirectives = args.FindOrphanDirectives
+RenameId = args.RenameId
+SendId = args.SendId
+
+TargetPath = args.TargetPath
+Prefix = args.Prefix
+
+# Move group(s)
+SourceRuleId = args.SourceRuleId
+DestinationRuleId = args.DestinationRuleId
+MoveGroups = args.MoveGroups
+CopyExcludeGroups = args.CopyExcludeGroups
+
+RULE_TREE = None
+
+
+def get(host, token, api):
+  url='https://%s/rudder/api/latest/%s?prettify=true' % (host, api)
+  req = urllib2.Request(url)
+  req.add_header('X-API-Token', token)
+
+  context = ssl._create_unverified_context()
+  try:
+    res = urllib2.urlopen(req, context=context)
+
+    jq = res.read()
+    return json.loads(jq)
+  # Stop processing when unable to process GET method
+  except urllib2.HTTPError, e:
+    print "Error getting %s from %s" % (api, host)
+    print url
+    print "%s" % e.read()
+    sys.exit()
+  except urllib2.URLError, e:
+    print "Error getting %s from %s" % (api, host)
+    print 'URLError = ' + str(e.reason)
+    sys.exit()
+  except Exception:
+    import traceback
+    print 'Generic exception: ' + traceback.format_exc()
+    sys.exit()
+
+
+def put(host, token, api, data):
+  context = ssl._create_unverified_context()
+  url='https://%s/rudder/api/latest/%s' % (host, api)
+  req = urllib2.Request(url, data)
+#  print "***", data
+  req.add_header('X-API-Token', token)
+  req.add_header('Content-Type', 'application/json; charset=utf-8')
+  req.get_method = lambda:"PUT"
+
+  try:
+    res = urllib2.urlopen(req, context=context)
+    body = res.read()
+#    print "body = %s" % body
+#    length = res.info()['Content-Length']
+    js = json.loads(body)
+    if 'id' in js:
+      return js['id']
+    else:
+      try:
+        if 'directives' in js['data']:
+#          print js['data']['directives'][0]['id']
+          return js['data']['directives'][0]['id']  # It's a cat's concert!
+        elif 'ruleCategories' in js['data']:
+          return js['data']['ruleCategories']['id']  # It's a cat's concert!
+      except:
+        print "WTF!? PUT result is:\n%s\n" % body
+        sys.exit(0)
+  except urllib2.HTTPError, e:
+      body = e.read()
+      try:
+        js = json.loads(body)
+      except:
+        js={}
+        js['id'] = 'NO_ANSWER_BODY!'
+
+      if body.rfind('same name exists') > 0:
+        print "* Group/rule category exists on %s" % host
+        return "1" # To be updated
+      elif body.rfind('group with the same') > 0:
+        print "  * Group exists on %s" % host
+        return "1" # To be updated
+      elif body.rfind('parameter with the same name') > 0:
+        print "  * Parameter \"%s\" exists on %s" % (js['id'], host)
+        return "1" # To be updated
+      elif  body.rfind('rule with the same name') > 0: #  Rule
+        print "  * Rule \"%s\" exists on %s" % (json.loads(data)['displayName'], host)
+        return "1" # To be updated
+      elif  body.rfind('already') > 0: #  Directive
+        print "  * %s = %s::\"%s\" exists on %s" % (js['errorDetails'], json.loads(data)['techniqueName'], json.loads(data)['displayName'], host)
+        return "1" # To be updated
+      elif body.rfind('rule with the same name') > 0:
+        print "  * Rule exists on %s" % host
+        return "1" # To be updated
+      else:
+        print req.get_full_url()
+        print req.get_method()
+        print 'HTTPError = ' + str(e.code) + "\n" + str(e.hdrs) + "\n" + body
+  except urllib2.URLError, e:
+      print 'URLError = ' + str(e.reason)
+      sys.exit()
+  except Exception:
+      import traceback
+      print 'generic exception: ' + traceback.format_exc()
+      sys.exit()
+
+  return "0" # Failed
+
+
+def post(host, token, api, uuid, data):
+  context = ssl._create_unverified_context()
+  url='https://%s/rudder/api/latest/%s/%s' % (host, api, uuid)
+  req = urllib2.Request(url, data)
+#  print "***", data
+  req.add_header('X-API-Token', token)
+  req.add_header('Content-Type', 'application/json; charset=utf-8')
+  req.get_method = lambda:"POST"
+
+  try:
+#    print data
+    res = urllib2.urlopen(req, context=context)
+    body = res.read()
+#    print "body = %s" % body
+#    length = res.info()['Content-Length']
+    return 0 # OK
+  except urllib2.HTTPError, e:
+      body = e.read()
+      print req.get_full_url()
+      print req.get_method()
+      print 'HTTPError = ' + str(e.code) + "\n" + str(e.hdrs) + "\n" + body
+  except urllib2.URLError, e:
+      print 'URLError = ' + str(e.reason)
+      sys.exit()
+  except Exception:
+      import traceback
+      print 'generic exception: ' + traceback.format_exc()
+      sys.exit()
+
+  return -1 # Failed
+
+
+def delete(host, token, api, uuid):
+  context = ssl._create_unverified_context()
+  url='https://%s/rudder/api/latest/%s/%s' % (host, api, uuid)
+  req = urllib2.Request(url)
+#  print "***", data
+  req.add_header('X-API-Token', token)
+  req.add_header('Content-Type', 'application/json; charset=utf-8')
+  req.get_method = lambda:"DELETE"
+
+  try:
+#    print data
+    res = urllib2.urlopen(req, context=context)
+#    body = res.read()
+#    print body
+#    length = res.info()['Content-Length']
+    return 0 # OK
+  except urllib2.HTTPError, e:
+      body = e.read()
+      print req.get_full_url()
+      print req.get_method()
+      print 'HTTPError = ' + str(e.code) + "\n" + "\n" + body # + str(e.hdrs)
+  except urllib2.URLError, e:
+      print 'URLError = ' + str(e.reason)
+      sys.exit()
+  except Exception:
+      import traceback
+      print 'generic exception: ' + traceback.format_exc()
+      sys.exit()
+
+  return -1 # Failed
+
+
+# Recursive search for category by it's name and parent id inside rule|group tree
+def FindCategoryId(parent, name, rt):
+#  print "rt=%s" % rt
+  for cat in rt:
+#    print "cat=%s" % cat
+    if (cat['parent'] == parent) & (cat['name'] == name):
+      return cat['id']
+
+    if 'categories' in cat:
+      uuid = FindCategoryId(parent, name, cat['categories'])
+      if uuid != None:
+        return uuid
+  return None # Search failed
+
+
+# Recursive search for rules with category id inside rule tree
+def FindCategoryRules(uuid, rt):
+  if uuid == "rootRuleCategory":
+    return rt['rules']
+  else:
+    return FindCategoryRulesR(uuid, rt['categories'])
+
+def FindCategoryRulesR(uuid, rt):
+  for cat in rt:
+    if (cat['id'] == uuid):
+      return cat['rules']
+
+    if 'categories' in cat:
+      rules = FindCategoryRulesR(uuid, cat['categories'])
+      if rules != None:
+        return rules
+  return None # Search failed
+
+
+# Recursive search for groups with category id inside group tree
+def FindCategoryGroups(uuid, gt):
+  if uuid == "GroupRoot":
+    return gt['groups']
+  else:
+    return FindCategoryGroupsR(uuid, gt['categories'])
+
+def FindCategoryGroupsR(uuid, gt):
+  for cat in gt:
+    if (cat['id'] == uuid):
+      return cat['groups']
+
+    if 'categories' in cat:
+      groups = FindCategoryGroupsR(uuid, cat['categories'])
+      if groups != None:
+        return groups
+  return None # Search failed
+
+
+#######
+# Recursive search for rules containing id (include|exclude targets) inside rule tree
+def findGroupRules(uuid, rt):
+  scanRules(uuid, rt['rules'], '')
+  FindGroupRulesR(uuid, rt['categories'], '')
+
+def FindGroupRulesR(uuid, rt, path):
+  for cat in rt:
+    scanRules(uuid, cat['rules'], "%s/%s" % (path, cat['name']))
+
+    if 'categories' in cat:
+      rules = FindGroupRulesR(uuid, cat['categories'], "%s/%s" % (path, cat['name']))
+      if rules != None:
+        scanRules(uuid, cat['rules'])
+  return
+
+def scanRules(uuid, rules, path):
+  for r in rules:
+    if len(r['targets']) > 0:
+      # Include
+      targets = list(r['targets'][0]['include']['or'])
+      if len(targets) > 0:
+        for i in targets:
+          g = i.split(':')
+          if g[1] == uuid:
+            print "+: %s/%s" % (path, r['displayName'])
+      # Exclude
+      targets = list(r['targets'][0]['exclude']['or'])
+      if len(targets) > 0:
+        for i in targets:
+          g = i.split(':')
+          if g[1] == uuid:
+            print "-: %s/%s" % (path, r['displayName'])
+
+
+
+#################### Main routine #######################################################
+def main():
+  # Find orphan directives (with tag "actual"='+')
+  if FindOrphanDirectives:
+    # Rule tree
+    js = get(DstHost, DstKey, 'rules/tree')
+    RULE_TREE = json.dumps(js['data']['ruleCategories']['categories'])
+    # Directives
+    js1 = get(DstHost, DstKey, 'directives')
+  #  print js1
+
+    DIRECTIVES = js1['data']['directives']
+    for d in DIRECTIVES:
+      if RULE_TREE.find(d['id']) < 1:
+        if len(d['tags']) > 0:
+          for i in range(len(d['tags'])):
+            tag = d['tags'][i]
+            if 'actual' in tag:
+              if d['tags'][i]['actual'] == '+':
+                print d['id'] + " " + d['displayName']
+                if DeleteId.lower() == 'orphan':
+                  if delete(DstHost, DstKey, 'directives', d['id']) == 0:
+                    print " * orphan successfully removed"
+
+    sys.exit()
+
+
+
+  # Delete rule and it's directives
+  if DeleteId:
+    print "** Delete rule %s, if it has prefix \"%s\"" % (DeleteId, Prefix)
+    js = get(DstHost, DstKey, 'rules/%s' % DeleteId)
+    js = js['data']['rules'][0]
+    name = js['displayName']
+    if name.find(Prefix) != 0:
+      print "Abort deletion of rule without prefix \"%s\"!" % Prefix
+      sys.exit(-1)
+
+    # Directives
+    if len(js['directives']) > 0:
+      for i in range(len(js['directives'])):
+  #      print js['directives'][i]
+        js1 = get(DstHost, DstKey, 'directives/%s' % js['directives'][i])
+        js1 = js1['data']['directives'][0]
+  #      print js1
+        name = js1['displayName']
+        if name.find(Prefix) != 0:
+          print "Abort deletion of directive \"%s\" without prefix \"%s\"!" % (name, Prefix)
+          print js1
+          sys.exit(-1)
+      for i in range(len(js['directives'])):
+        js1 = get(DstHost, DstKey, 'directives/%s' % js['directives'][i])
+        js1 = js1['data']['directives'][0]
+        if delete(DstHost, DstKey, 'directives', js['directives'][i]) == 0:
+          print "Ok deleting directive: \"%s\"" % js1['displayName']
+
+
+    if delete(DstHost, DstKey, 'rules', DeleteId) == 0:
+      print "Ok deleting rule: \"%s\"" % js['displayName']
+
+
+
+  # Rename rule and it's directives using prefix
+  if RenameId:
+    print "** Rename rule %s, add prefix \"%s\"" % (RenameId, Prefix)
+    # Rule
+    js = get(DstHost, DstKey, 'rules/%s' % RenameId)
+    js = js['data']['rules'][0]
+
+    name = js['displayName']
+    js['displayName'] = "%s%s" % (Prefix, name)
+    # Unset actual while renaming to 'old'
+    append = 1
+    if len(js['tags']) > 0:
+      for i in range(len(js['tags'])):
+        tag = js['tags'][i]
+        if 'actual' in tag:
+          js['tags'][i] = {u'actual':u'0'}
+          append = 0
+    if append == 1:
+      js['tags'].append({'actual':'0'})
+
+    if post(DstHost, DstKey, 'rules', RenameId, json.dumps(js)) == 0:
+      print "Ok renaming rule: \"%s\"" % js['displayName']
+    else:
+      print "Error renaming rule: \"%s\"" % js['displayName']
+      sys.exit(-1)
+
+    # Directives
+    if len(js['directives']) > 0:
+      for i in range(len(js['directives'])):
+  #      print js['directives'][i]
+        js1 = get(DstHost, DstKey, 'directives/%s' % js['directives'][i])
+        js1 = js1['data']['directives'][0]
+  #      print js1
+        name = js1['displayName']
+        js1['displayName'] = "%s%s" % (Prefix, name)
+        # Unset actual while renaming to 'old'
+        append = 1
+        if len(js1['tags']) > 0:
+          for j in range(len(js1['tags'])):
+            tag = js1['tags'][j]
+            if 'actual' in tag:
+              js1['tags'][j] = {u'actual':u'0'}
+              append = 0
+        if append == 1:
+          js1['tags'].append({'actual':'0'})
+
+        if post(DstHost, DstKey, 'directives', js['directives'][i], json.dumps(js1)) == 0:
+          print "Ok renaming directive: \"%s\"" % js1['displayName']
+        else:
+          print "Error renaming directive: \"%s\"" % js1['displayName']
+          sys.exit(-1)
+
+
+  if DstInfoGroup:
+  # Find group by it's full path on DstHost
+    js = get(DstHost, DstKey, 'groups/tree')
+    GROUP_TREE = js['data']['groupCategories'] #['categories']
+  #  print GROUP_TREE
+  #  sys.exit(0)
+    group = None
+    description = ''
+    parent = 'GroupRoot'
+    path = DstInfoGroup.split('/')
+    for i in range(len(path)):
+      if i != (len(path) - 1):
+        # Find group category
+  #      print path[i]
+        parent = FindCategoryId(parent, path[i], GROUP_TREE['categories'])
+        if parent == None:
+          print "Error: category \"" + path[i] + "\" not found"
+          sys.exit(-1)
+  #      print parent
+      else:
+        # Find group
+        groups = FindCategoryGroups(parent, GROUP_TREE)
+        if groups == None:
+          print "Error: group \"" + path[i] + "\" not found"
+          sys.exit(-1)
+        for g in groups:
+          if g['displayName'] == path[i]:
+            print "UUID: %s" % g['id']
+            js1 = get(DstHost, DstKey, 'rules/tree')
+            RULE_TREE = js1['data']['ruleCategories'] #['categories']
+            findGroupRules(g['id'], RULE_TREE)
+            sys.exit(0)
+        print "Error: group \"" + path[i] + "\" not found"
+        sys.exit(-1)
+
+
+  if SrcInfoGroup:
+  # Find group by it's full path on SrcHost
+    js = get(SrcHost, SrcKey, 'groups/tree')
+    GROUP_TREE = js['data']['groupCategories'] #['categories']
+  #  print GROUP_TREE
+  #  sys.exit(0)
+    group = None
+    description = ''
+    parent = 'GroupRoot'
+    path = SrcInfoGroup.split('/')
+    for i in range(len(path)):
+      if i != (len(path) - 1):
+        # Find group category
+  #      print path[i]
+        parent = FindCategoryId(parent, path[i], GROUP_TREE['categories'])
+        if parent == None:
+          print "Error: category \"" + path[i] + "\" not found"
+          sys.exit(-1)
+      else:
+        # Find group
+        groups = FindCategoryGroups(parent, GROUP_TREE)
+        if groups == None:
+          print "Error: group \"" + path[i] + "\" not found"
+          sys.exit(-1)
+        if len(groups) == 0:
+          print "Error: groups list is empty"
+          sys.exit(-1)
+        for g in groups:
+          if g['displayName'] == path[i]:
+            print "UUID: %s" % g['id']
+            js1 = get(SrcHost, SrcKey, 'rules/tree')
+            RULE_TREE = js1['data']['ruleCategories'] #['categories']
+            findGroupRules(g['id'], RULE_TREE)
+            sys.exit(0)
+        print "Error: group \"" + path[i] + "\" not found"
+        sys.exit(-1)
+
+
+  if DstInfoPath:
+  # Find rule by it's full path on DstHost
+    js = get(DstHost, DstKey, 'rules/tree')
+    RULE_TREE = js['data']['ruleCategories'] #['categories']
+  #  print RULE_TREE
+  #  sys.exit(0)
+    rule = None
+    description = ''
+    parent = 'rootRuleCategory'
+    path = DstInfoPath.split('/')
+    for i in range(len(path)):
+      if i != (len(path) - 1):
+        # Find rule category
+  #      print path[i]
+        parent = FindCategoryId(parent, path[i], RULE_TREE['categories'])
+        if parent == None:
+          print "Error: category \"" + path[i] + "\" not found"
+          sys.exit(-1)
+  #      print parent
+      else:
+        # Find rule
+        rules = FindCategoryRules(parent, RULE_TREE)
+        if rules == None:
+          print "Error: rule \"" + path[i] + "\" not found"
+          sys.exit(-1)
+        for r in rules:
+          if r['displayName'] == path[i]:
+            print "UUID: %s" % r['id']
+  #          print "displayName: %s" % r['displayName']
+  #          print "Description: %s" % r['longDescription']
+          elif r['displayName'] == Prefix + path[i]:
+            print "UUID_old: %s" % r['id']
+          elif r['displayName'] == Prefix + Prefix + path[i]:
+            print "UUID_old_old: %s" % r['id']
+          elif r['displayName'] == Prefix + Prefix + Prefix + path[i]:
+            print "UUID_old_old_old: %s" % r['id']
+
+
+  if SrcInfoPath:
+  # Find rule by it's full path on DstHost
+    js = get(SrcHost, SrcKey, 'rules/tree')
+    RULE_TREE = js['data']['ruleCategories'] #['categories']
+  #  print RULE_TREE
+    rule = None
+    description = ''
+    parent = 'rootRuleCategory'
+    path = SrcInfoPath.split('/')
+    for i in range(len(path)):
+      if i != (len(path) - 1):
+        # Find rule category
+  #      print path[i]
+        parent = FindCategoryId(parent, path[i], RULE_TREE['categories'])
+        if parent == None:
+          print "Error: category \"" + path[i] + "\" not found"
+          sys.exit(-1)
+  #      print parent
+      else:
+        # Find rule
+        rules = FindCategoryRules(parent, RULE_TREE)
+        if rules == None:
+          print "Error: rule \"" + path[i] + "\" not found"
+          sys.exit(-1)
+        for r in rules:
+          if r['displayName'] == path[i]:
+            print "UUID: %s" % r['id']
+  #          print "displayName: %s" % r['displayName']
+  #          print "Description: %s" % r['longDescription']
+          elif r['displayName'] == Prefix + path[i]:
+            print "UUID_old: %s" % r['id']
+          elif r['displayName'] == Prefix + Prefix + path[i]:
+            print "UUID_old_old: %s" % r['id']
+          elif r['displayName'] == Prefix + Prefix + Prefix + path[i]:
+            print "UUID_old_old_old: %s" % r['id']
+
+
+
+  # Send rule and it's directives from SrcHost to DstHost.
+  # New objects (UUIDs) will be created on DstHost, using the same names as in SrcHost.
+  if SendId:
+    print "** Send rule %s >> \"%s\"" % (SendId, TargetPath)
+    # Rule tree to find categories
+    js = get(DstHost, DstKey, 'rules/tree')
+    RULE_TREE = js['data']['ruleCategories']['categories']
+
+    # SRC Rule
+    js = get(SrcHost, SrcKey, 'rules/%s' % SendId)
+    js = js['data']['rules'][0]
+
+    # Rule category >> Rule
+    rule = None
+    description = ''
+    parent = 'rootRuleCategory'
+    path = TargetPath.split('/')
+    for i in range(len(path)):
+      if i != (len(path) - 1):
+        # Make|find rule category
+        print path[i]
+        category = put(DstHost, DstKey, 'rules/categories', json.dumps({'name': path[i], 'parent': parent, 'description': description}) )
+        if category == "1": # Find uuid
+          parent = FindCategoryId(parent, path[i], RULE_TREE)
+          print parent
+        else:
+          parent = category
+      else:
+        # Save rule
+        del js['id']
+        js['category'] = parent
+        js['displayName'] = path[i]
+        # Set actual = '+' for recently imported rule
+        append = 1
+        if len(js['tags']) > 0:
+          for i in range(len(js['tags'])):
+            tag = js['tags'][i]
+            if 'actual' in tag:
+              js['tags'][i] = {u'actual':u'+'}
+              append = 0
+        if append == 1:
+          js['tags'].append({'actual':'+'})
+
+    # SRC Directives
+    directives = []
+    if len(js['directives']) > 0:
+      for i in range(len(js['directives'])):
+        js1 = get(SrcHost, SrcKey, 'directives/%s' % js['directives'][i])
+        js1 = js1['data']['directives'][0]
+        del js1['id']
+        # Set actual = '+' for recently imported directive
+        append = 1
+        if len(js1['tags']) > 0:
+          for i in range(len(js1['tags'])):
+            tag = js1['tags'][i]
+            if 'actual' in tag:
+              js1['tags'][i] = {u'actual':u'+'}
+              append = 0
+        if append == 1:
+          js1['tags'].append({'actual':'+'})
+
+        res = put(DstHost, DstKey, 'directives', json.dumps(js1))
+        if len(res) > 1:
+          print "Ok sending directive: \"%s\"" % js1['displayName']
+          directives.append(res) # New directive id
+        else:
+          if res == "1":
+            print "** Directive exists: name=\"%s\"" % js1['displayName']
+            sys.exit(-1)
+          else:
+            print "Error sending directive \"%s\"" % js1['displayName']
+            sys.exit(-1)
+
+    # Clean original directives and groups uuids
+    for i in range(len(js['directives'])):
+      del js['directives'][0]
+    for i in range(len(js['targets'])):
+      del js['targets'][0]
+    # New directive set
+    js['directives'] = directives
+
+    rule = put(DstHost, DstKey, 'rules', json.dumps(js))
+    if len(rule) > 1:
+      print "Ok sending rule: \"%s\", UUID = \"%s\"" % (js['displayName'], rule)
+
+
+  # Copy xgroups on DstHost from SourceRule to DestinationRule
+  if (SourceRuleId != '') & (DestinationRuleId != '') & (CopyExcludeGroups != ''):
+    print "** Сopy xgroups [%s] between (%s >> %s)" % (CopyExcludeGroups, SourceRuleId, DestinationRuleId)
+    # SRC Rule
+    js = get(DstHost, DstKey, 'rules/%s' % SourceRuleId)
+    r1 = js['data']['rules'][0]
+    # DST Rule
+    js = get(DstHost, DstKey, 'rules/%s' % DestinationRuleId)
+    r2 = js['data']['rules'][0]
+
+    if (CopyExcludeGroups == '*') | (CopyExcludeGroups.lower() == 'all'):
+      groups = []    # Exclude
+      for i in r1['targets']:
+        for k in i['exclude']['or']:
+          k = k.split(':')
+          groups.append(k[1])
+    else:
+      groups = CopyExcludeGroups.split('/')
+      # Check whether list is valid against SRC Rule
+      for i in groups:
+        ok = 0
+        for j in r1['targets']:
+          # u'targets': [{u'exclude': {u'or': []}, u'include': {u'or': [u'group:625c1b85-262a-45ba-a1f2-143ea98ea49a', u'group:9ffda1b0-adae-4090-96d6-0ba56576a319']}}]
+          for k in j['exclude']['or']:
+            k = k.split(':')
+            if i == k[1]:
+              ok = 1
+              break
+          if ok == 1:
+            break
+
+        if ok != 1:
+          print "Error: SRC Rule doesn't contain group id \"%s\"" % i
+          sys.exit(1)
+
+  # Only append new groups to r2 (like tags):
+
+    if len(r2['targets']) > 0:
+      if len(r2['targets'][0]['exclude']['or']) > 0:
+        for i in r2['targets'][0]['exclude']['or']:
+          g = i.split(':')
+          g = g[1]
+          if g in groups:
+  #          print g
+            groups.remove(g)
+    else:
+      r2['targets'] = []
+      r2['targets'].append({'exclude': {'or': []}})
+  #    print r2['targets']
+    if len(groups) > 0:
+      for g in groups:
+  #      print g
+        r2['targets'][0]['exclude']['or'].append("group:%s" % g)
+
+
+    if post(DstHost, DstKey, 'rules', DestinationRuleId, json.dumps(r2)) == 0:
+      print "Ok updating rule: \"%s\", UUID = \"%s\"" % (r2['displayName'], DestinationRuleId)
+
+
+
+  # Move groups on DstHost from SourceRule to DestinationRule
+  if (SourceRuleId != '') & (DestinationRuleId != '') & (MoveGroups != ''):
+    print "** Move groups [%s] between (%s >> %s)" % (MoveGroups, SourceRuleId, DestinationRuleId)
+    # SRC Rule
+    js = get(DstHost, DstKey, 'rules/%s' % SourceRuleId)
+    r1 = js['data']['rules'][0]
+    # DST Rule
+    js = get(DstHost, DstKey, 'rules/%s' % DestinationRuleId)
+    r2 = js['data']['rules'][0]
+
+    if (MoveGroups == '*') | (MoveGroups.lower() == 'all'):
+      groups = []    # Include
+      for i in r1['targets']:
+        for k in i['include']['or']:
+          k = k.split(':')
+          groups.append(k[1])
+    else:
+      groups = MoveGroups.split('/')
+      # Check whether list is valid against SRC Rule
+      for i in groups:
+        ok = 0
+        for j in r1['targets']:
+          # u'targets': [{u'exclude': {u'or': []}, u'include': {u'or': [u'group:625c1b85-262a-45ba-a1f2-143ea98ea49a', u'group:9ffda1b0-adae-4090-96d6-0ba56576a319']}}]
+          for k in j['include']['or']:
+            k = k.split(':')
+            if i == k[1]:
+              ok = 1
+              break
+          if ok == 1:
+            break
+
+        if ok != 1:
+          print "Error: SRC Rule doesn't contain group id \"%s\"" % i
+          sys.exit(1)
+
+  # It's a bad idea to rewrite all groups:
+  #  GROUPS = {'exclude':{'or':[]}, 'include':{'or':[]}}
+  #  for i in groups:
+  #    GROUPS['include']['or'].append("group:%s" % i)
+  #  print GROUPS
+  #
+  #  r2['targets'] = [GROUPS]
+
+    remove_groups = list(groups) # Store list to be removed from r1
+  # Only append new groups to r2 (like tags):
+
+    if len(r2['targets']) > 0:
+      if len(r2['targets'][0]['include']['or']) > 0:
+        for i in r2['targets'][0]['include']['or']:
+          g = i.split(':')
+          g = g[1]
+          if g in groups:
+  #          print g
+            groups.remove(g)
+    else:
+      r2['targets'] = []
+      r2['targets'].append({'include': {'or': []}})
+  #    print r2['targets']
+    if len(groups) > 0:
+      for g in groups:
+  #      print g
+        r2['targets'][0]['include']['or'].append("group:%s" % g)
+
+
+
+    if post(DstHost, DstKey, 'rules', DestinationRuleId, json.dumps(r2)) == 0:
+      print "Ok updating rule: \"%s\", UUID = \"%s\"" % (r2['displayName'], DestinationRuleId)
+
+  # Finally, remove groups from r1
+    if len(r1['targets']) > 0:
+      targets = list(r1['targets'][0]['include']['or'])
+      if len(targets) > 0:
+        for i in targets:
+          g = i.split(':')
+          g = g[1]
+          if g in remove_groups:
+            r1['targets'][0]['include']['or'].remove("group:%s" % g)
+
+  #  print r1['targets'][0]['include']['or']
+    if post(DstHost, DstKey, 'rules', SourceRuleId, json.dumps(r1)) == 0:
+      print "Ok updating old rule: \"%s\", UUID = \"%s\"" % (r1['displayName'], SourceRuleId)
+
+
+
+###################### Exclusive running ######################
+import fcntl
+lock_file="/var/lock/rule-replica.%s--%s" % (SrcHost, DstHost)
+#print lock_file
+#sys.exit()
+self=0
+try:
+  # Not so strong, as file can be removed outside of process
+  lck = open(lock_file, 'w')
+  # But, better then nothing
+  fcntl.lockf(lck, fcntl.LOCK_EX | fcntl.LOCK_NB)
+  self=1
+  main()
+
+except EnvironmentError as err:
+  if lck is not None:
+    print "Another instance is running! Lock found on \"%s\"" % lock_file
+    sys.exit(1)
+  else:
+    raise
+
+finally:
+  if self > 0:
+    os.remove(lock_file)
+###############################################################

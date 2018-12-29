@@ -1,0 +1,128 @@
+<!--
+Copyright 2018 Dmitry Svyatogorov <dsvyatogorov@marathonbet.ru>
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, Version 3.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <http://www.gnu.org/licenses/>.
+-->
+
+<TECHNIQUE name="File update (HTTP)">
+  <DESCRIPTION>This technique downloads a file from a server.<BR/>
+
+  It takes a cURL compatible source (http://server.url.domain/path/to/file.name) and a destination on the target host.
+  File is downloaded when:
+  * Destination is empty.
+  * Source was modified (header "Last-Modified:" changed since previous download).
+
+  Metadata is stored under "/var/rudder/cfengine-community/state/previous_state/".
+  </DESCRIPTION>
+
+  <MULTIINSTANCE>true</MULTIINSTANCE>
+  <BUNDLES>
+    <NAME>download_from_http</NAME>
+  </BUNDLES>
+
+  <TMLS>
+    <TML name="copyHttpFile"/>
+  </TMLS>
+
+  <COMPATIBLE>
+    <OS version=">= 5">Debian</OS>
+    <OS version=">= 4 (Nahant)">RHEL / CentOS</OS>
+    <OS version=">= 10 SP1 (Agama Lizard)">SuSE LES / DES / OpenSuSE</OS>
+    <AGENT version=">= 3.1.5">CFEngine community</AGENT>
+  </COMPATIBLE>
+
+  <TRACKINGVARIABLE>
+    <SAMESIZEAS>HTTP_FILE_PATH</SAMESIZEAS>
+  </TRACKINGVARIABLE>
+
+  <SECTIONS>
+    <SECTION name="CURL settings" multivalued="false" component="false">
+      <INPUT>
+        <NAME>CURL_SPEED_MB</NAME>
+        <DESCRIPTION>Speed limit for curl, in MB/s</DESCRIPTION>
+        <CONSTRAINT>
+          <TYPE>string</TYPE>
+          <REGEX error="Please enter a valid integer">([0-9]*)</REGEX>
+          <DEFAULT>10</DEFAULT>
+        </CONSTRAINT>
+      </INPUT>
+    </SECTION>
+
+    <SECTION name="Download file and PostHook" multivalued="true">
+    <SECTION name="Download file from HTTP" multivalued="false" component="true" componentKey="HTTP_FILE_PATH">
+      <INPUT>
+        <NAME>HTTP_FILE_PATH</NAME>
+        <DESCRIPTION>Full path of destination file (on which permissions defined below will be applied)</DESCRIPTION>
+        <LONGDESCRIPTION>This is the absolute path of the file on the managed node.
+The permissions defined below will be applied on the destination.
+        </LONGDESCRIPTION>
+        <CONSTRAINT>
+          <TYPE>string</TYPE>
+          <REGEX error="Please enter a valid full path for this file">(/.*)</REGEX>
+        </CONSTRAINT>
+      </INPUT>
+      <INPUT>
+        <NAME>HTTP_FILE_URL</NAME>
+        <DESCRIPTION>Source URL http(s)://server.domain.tld/path/to/file.name</DESCRIPTION>
+        <CONSTRAINT>
+          <TYPE>string</TYPE>
+          <REGEX error="Please enter a valid HTTP URI">(https?://.*)</REGEX>
+        </CONSTRAINT>
+      </INPUT>
+
+      <INPUT>
+        <NAME>HTTP_FILE_MODE</NAME>
+        <DESCRIPTION>File permissions after download</DESCRIPTION>
+        <CONSTRAINT>
+          <TYPE>perm</TYPE>
+          <DEFAULT>640</DEFAULT>
+        </CONSTRAINT>
+      </INPUT>
+      <INPUT>
+        <NAME>HTTP_FILE_USER</NAME>
+        <DESCRIPTION>File owner (user)</DESCRIPTION>
+        <CONSTRAINT>
+          <DEFAULT>root</DEFAULT>
+        </CONSTRAINT>
+      </INPUT>
+      <INPUT>
+        <NAME>HTTP_FILE_GROUP</NAME>
+        <DESCRIPTION>File owner (group)</DESCRIPTION>
+        <CONSTRAINT>
+          <DEFAULT>root</DEFAULT>
+        </CONSTRAINT>
+      </INPUT>
+    </SECTION>
+
+    <SECTION name="Post-modification hook" component="true" multivalued="false" componentKey="HTTP_FILE_PATH" displayPriority="low">
+       <INPUT>
+          <NAME>HTTP_FILE_POST_HOOK_RUN</NAME>
+          <DESCRIPTION>Should the command(s) below be run if any modifications (permission or overwriting) are made on the files above?</DESCRIPTION>
+          <CONSTRAINT>
+            <TYPE>boolean</TYPE>
+            <DEFAULT>false</DEFAULT>
+          </CONSTRAINT>
+       </INPUT>
+       <INPUT>
+          <NAME>HTTP_FILE_POST_HOOK_COMMAND</NAME>
+          <DESCRIPTION>Command to run after any modifications</DESCRIPTION>
+          <CONSTRAINT>
+            <TYPE>textarea</TYPE>
+            <MAYBEEMPTY>true</MAYBEEMPTY>
+          </CONSTRAINT>
+       </INPUT>
+     </SECTION>
+    </SECTION>
+  </SECTIONS>
+
+</TECHNIQUE>

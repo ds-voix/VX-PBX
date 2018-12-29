@@ -3,3 +3,6 @@ There will be placed some parts to make Rudder http://www.rudder-project.org/ im
 
 "api.py" is prototype to call rudder's API
 "rudder-replica.py" is generally working replication solution, implementing network model similar to OOP.
+
+*This toolset is too sophisticated, and so it is deprecated.
+Look under "replicator/" for actual 3-component view.*

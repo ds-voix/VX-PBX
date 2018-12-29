@@ -1,0 +1,130 @@
+#!/bin/bash
+# INIT=1 SRC="rudder-deb.xxx.local" DST=localhost NORENAME=1 NOCOPY=1 DELETE=1 CLEAN=1 NEW=8f9391be-d2a1-415b-968f-7346f37de93c OLD=2cf71bd0-2eac-41dc-8c97-6422dcfbf1ee rule-replace 'Debian/deb: dnsmasq'
+path="$1"
+
+if [ -z "${path}" ]; then # Print hint and exit
+  echo " Usage: [variable1=x variable2=y ...] $0 \"Path/to/directive name\"
+  The following variables can be set:
+INIT=1 - Make first replica (w/o any groups and so on)
+SRC=src.host.fqdn - Set source host, instead of \"rudder-root.xxx.local\"
+DST=dst.host.fqdn - Set destination host, instead of localhost
+NORENAME=1 - Skip old rule/it's directives renaming with prefix \"#old \"
+NOCOPY=1 - Skip replication (e.g. we need to transfer groups between rules, and no more)
+DELETE=1 - Delete deprecated rule/it's directives (with prefix \"#old \") before further processing
+CLEAN=1 - The same as DELETE, but AFTER all other operations
+ORPHAN=1 - Remove orphan directives  (those with tag \"actual\"='+')
+NEW=UUID - Use this UUID on SRC host (skip searching rule by name)
+OLD=UUID - Use this UUID on DST host (skip searching rule by name)
+"
+  exit
+fi
+
+echo "* Replacing rule \"$path\" and all of it's directives"
+
+src="${SRC}"
+if [ -z "${src}" ]; then
+  src="rudder-root.xxx.local"
+fi
+s_ip="`host ${src}`"
+if [ $? -ne 0 -o -z "${s_ip}" ]; then
+  echo "*** Error: unknown host name \"${src}\""
+  exit 255
+fi
+
+dst="${DST}"
+if [ -z "${dst}" ]; then
+  dst="localhost"
+fi
+d_ip="`host ${dst}`"
+if [ $? -ne 0 -o -z "${d_ip}" ]; then
+  echo "*** Error: unknown host name \"${dst}\""
+  exit 255
+fi
+
+if [ "${src}" = "${dst}" ]; then
+  echo "*** SRC host and DST host MUST NOT BE THE SAME!"
+  echo "SRC:
+${s_ip}"
+  echo "DST:
+${d_ip}"
+  exit 255
+fi
+
+
+new="${NEW}"
+if [ -z "${new}" ]; then
+  new=`rule-replica -h ${src}:8443 -k = -H ${dst}:8443 -K = -i "${path}" | awk '{if ($1 ~ "UUID:") print $2}'`
+fi
+
+old="${OLD}"
+if [ -z "${old}" ]; then
+  old=`rule-replica -h ${src}:8443 -k = -H ${dst}:8443 -K = -I "${path}" | awk '{if ($1 ~ "UUID:") print $2}'`
+fi
+
+if [ -n "${ORPHAN}" ]; then
+  rule-replica -h ${src}:8443 -k = -H ${dst}:8443 -K = -o --delete orphan
+fi
+
+if [ -n "${DELETE}" -a -z "${INIT}" ]; then
+  del=`rule-replica -h ${src}:8443 -k = -H ${dst}:8443 -K = -I "${path}" | awk '{if ($1 ~ "UUID_old:") print $2}'`
+  if [ -n "${del}" ]; then
+    echo "* Deleting deprecated \"#old\"-prefixed rule UUID=${del}, together with it's directives..."
+    rule-replica -h ${src}:8443 -k = -H ${dst}:8443 -K = -d "${del}"
+  fi
+fi
+
+if [ -z "${old}" ]; then
+  if [  -z "${INIT}" ]; then
+    echo "*** Old rule not found."
+    echo "* If it was already renamed, you can specify it's UUID as the third argument."
+    echo "    Existing target rules:"
+    rule-replica -h ${src}:8443 -k = -H ${dst}:8443 -K = -I "${path}" | sort
+    exit 1
+  fi
+else
+  if [ -z "${NORENAME}" -a -z "${INIT}" ]; then
+    echo "* Old rule uuid=\"${old}\". Renaming it together with directives. Add prefix \"#old\""
+    rule-replica -h ${src}:8443 -k = -H ${dst}:8443 -K = -r "${old}"
+    if [ $? -ne 0 ]; then
+      echo "*** Error while renaming old rule! Aborting!"
+      echo "    Existing target rules:"
+      rule-replica -h ${src}:8443 -k = -H ${dst}:8443 -K = -I "${path}" | sort
+      exit 2
+    fi
+  fi
+fi
+
+if [ -z "${NOCOPY}" ]; then
+  echo "* New rule uuid=\"${new}\". Copying it together with all of it's directives (with empty groups)"
+  rule-replica -h ${src}:8443 -k = -H ${dst}:8443 -K = -s "${new}" -t "${path}"
+  if [ $? -ne 0 ]; then
+    echo "Error while copying new rule! Aborting!"
+    exit 3
+  fi
+fi
+
+# Try to find new rule on destination host
+new=`rule-replica -h ${src}:8443 -k = -H ${dst}:8443 -K = -I "${path}" | awk '{if ($1 ~ "UUID:") print $2}'`
+if [ -z "${new}" ]; then
+  echo "*** New rule not found on ${dst}! Aborting!"
+  rule-replica -h ${src}:8443 -k = -H ${dst}:8443 -K = -I "${path}"
+  exit 4
+fi
+
+if [ -n "${INIT}" ]; then
+  echo "*** Initial clone is done."
+  exit
+fi
+
+echo "* New rule uuid=\"${new}\". Now, migrating all groups"
+rule-replica -h ${src}:8443 -k = -H ${dst}:8443 -K = -G All -g All -m "${old}" -M "${new}"
+
+if [ -n "${CLEAN}" ]; then
+  del=`rule-replica -h ${src}:8443 -k = -H ${dst}:8443 -K = -I "${path}" | awk '{if ($1 ~ "UUID_old:") print $2}'`
+  if [ -n "${del}" ]; then
+    echo "* Deleting deprecated \"#old\"-prefixed rule UUID=${del}, together with it's directives..."
+    rule-replica -h ${src}:8443 -k = -H ${dst}:8443 -K = -d "${del}"
+  fi
+fi
+
+echo "*** All done."
