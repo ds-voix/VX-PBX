@@ -1,0 +1,89 @@
+// Ask for pin. Call appropriate route when found
+// Spec = pin1>r1:pin2>r2:...:pinN>rN
+// insert into "Func" values ('090','ALL','DialPinCode','123>28584:321>28585:>28531');
+macro DialPinCode(Spec) {
+ NoOp(${leg1}>>${leg2} FUNCTION DialPinCode(${Spec}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+ Set(RESULT=Invalid Spec);
+ if ("${Spec}"="") return;
+
+ Answer;
+ Set(CHANNEL(language)=${DEFAULT_LANG});
+ local num=;
+ Read(LOCAL(num),vm-password,12,,,3);
+
+ for (LOCAL(i)=1; ${i}<=${FIELDQTY(Spec,:)}; LOCAL(i)=${i}+1) {
+  Set(LOCAL(sp)=${CUT(Spec,:,${i})});
+
+  if ("${CUT(sp,>,1)}"="${num}")
+  {
+   Set(LOCAL(rt)=${CUT(sp,>,2)});
+   if ("${rt}"="")
+   {
+    Set(RESULT=Empty route);
+    return;
+   }
+   Dial(LOCAL/${rt}@iax/n,,fg);
+   Set(RESULT=${DIALSTATUS});
+   return;
+  }
+ }
+ Set(RESULT=Invalid PIN);
+ Playback(conf-invalidpin);
+
+ return;
+} // macro DialPinCode(Spec)
+
+// Ask for pin. Call appropriate func when found
+// Spec = pin1>func1:pin2>func2:...:pinN>funcN
+// insert into "Func" values ('090','ALL','PinCode','123>_Dial(LOCAL/28584@iax/n|300|TtKkfg):321>_Dial(LOCAL/28585@iax/n|300|TtKkfg):>_Dial(LOCAL/28531@iax/n|300|TtKkfg)');
+macro PinCode(Spec) {
+ NoOp(${leg1}>>${leg2} FUNCTION PinCode(${Spec}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+ Set(RESULT=Invalid Spec);
+ if ("${Spec}"="") return;
+
+ Answer;
+ Set(CHANNEL(language)=${DEFAULT_LANG});
+ local num=;
+ Read(LOCAL(num),vm-password,12,,,3);
+
+ for (LOCAL(i)=1; ${i} <= ${FIELDQTY(Spec,:)}; LOCAL(i)=${i}+1) {
+  Set(LOCAL(sp)=${CUT(Spec,:,${i})});
+
+  if ("${CUT(sp,>,1)}"="${num}")
+  {
+   Set(LOCAL(fn)=${CUT(sp,>,2)});
+   if ("${fn}"="")
+   {
+    Set(RESULT=Empty func);
+    return;
+   }
+
+   Set(LOCAL(fnc)=${CUT(fn,\(,1)});
+   Set(LOCAL(arg)=${CUT(fn,\(,2)});
+   Set(LOCAL(arg)=${CUT(arg,\),1)});
+
+   //  Set(LOCAL(args)=${REPLACE(arg,\|,\,)}); Don't work in 1.6.2
+   Set(LOCAL(args)=${CUT(arg,|,1)});
+   for (LOCAL(j)=2; ${j} <= ${FIELDQTY(arg,|)}; LOCAL(j)=${j}+1) {
+    Set(LOCAL(args)=${args},${CUT(arg,|,${j})});
+   }
+
+   &${fnc}(${args});
+   NoOp(RESULT=${RESULT});
+   return;
+  }
+ } // for i
+
+ Set(RESULT=Invalid PIN);
+ Playback(conf-invalidpin);
+
+ return;
+} // macro PinCode(Spec)

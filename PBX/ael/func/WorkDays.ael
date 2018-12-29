@@ -1,0 +1,91 @@
+// Dial to "r1"|"r2", according to the number of simple calendar rules
+// Use trigger with z-level to bypass shedule
+// insert into "Func" values ('090','ALL','DialWorkDays','11:00-18:00^sat^*^*|10:00-19:00^mon-fri^*^*','531','585');
+
+macro DialWorkDays(Spec,r1,r2,ZT) {
+ NoOp(${leg1}>>${leg2} FUNCTION DialWorkDays(${Spec},${r1},${r2},${ZT}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+ if ("${r2}"="") Set(r2=${r1});
+
+ Set(LOCAL(T)=${ODBC_VAR(${ZT})});
+ local num=${r2};
+
+ if ("${T}"="") {
+  Set(LOCAL(qty)=${FIELDQTY(Spec,\|)});
+  for (LOCAL(i)=1; ${i}<=${qty}; LOCAL(i)=${i}+1) {
+   Set(LOCAL(spc)=${CUT(Spec,\|,${i})});
+
+   Set(LOCAL(spc1)=${CUT(spc,^,1)});
+   Set(LOCAL(spc2)=${CUT(spc,^,2)});
+   Set(LOCAL(spc3)=${CUT(spc,^,3)});
+   Set(LOCAL(spc4)=${CUT(spc,^,4)});
+
+   Set(LOCAL(res)=${IFTIME(${spc1},${spc2},${spc3},${spc4}?1:0)});
+   if (${res}=1) {
+    Set(LOCAL(num)=${r1});
+    break;
+   }
+  }
+ } else {
+  if ("${T}"="1") {
+   Set(LOCAL(num)=${r1});
+  }
+ }
+ Set(CHANNEL(language)=${DEFAULT_LANG});
+ Dial(LOCAL/${num}@iax/n,,fg);
+
+ return;
+} // macro DialWorkDays(Spec,r1,r2,ZT)
+
+// Call function "f1"|"f2", according to the number of simple calendar rules
+// Use trigger with z-level to bypass shedule
+// insert into "Func" values ('090','ALL',NULL,'WorkDays','09:00-21:00^*^*^*','_Dial(LOCAL/28584@iax/n|10|TtKkfgm)','_Dial(LOCAL/28585@iax/n|10|TtKkfgm)','ztWorkDays');
+macro WorkDays(Spec,f1,f2,ZT) {
+ NoOp(${leg1}>>${leg2} FUNCTION WorkDays(${Spec},${f1},${f2},${ZT}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+
+ Set(RESULT=Invalid Spec);
+ if ("${Spec}"="") return;
+ Set(RESULT=Invalid Func);
+ if ("${f1}"="") return;
+ if ("${f2}"="") Set(f2=${f1});
+
+ RESULT=OK;
+
+ Set(LOCAL(T)=${ODBC_VAR(${ZT})});
+ Set(LOCAL(fn)=${f2});
+
+ if ("${T}"="") {
+  Set(LOCAL(qty)=${FIELDQTY(Spec,\|)});
+  for (LOCAL(i)=1; ${i}<=${qty}; LOCAL(i)=${i}+1) {
+   Set(LOCAL(spc)=${CUT(Spec,\|,${i})});
+
+   Set(LOCAL(spc1)=${CUT(spc,^,1)});
+   Set(LOCAL(spc2)=${CUT(spc,^,2)});
+   Set(LOCAL(spc3)=${CUT(spc,^,3)});
+   Set(LOCAL(spc4)=${CUT(spc,^,4)});
+
+   Set(LOCAL(res)=${IFTIME(${spc1},${spc2},${spc3},${spc4}?1:0)});
+   if (${res}=1) {
+    Set(LOCAL(fn)=${f1});
+    break;
+   }
+  }
+ } else {
+  if ("${T}"="1") {
+   Set(LOCAL(fn)=${f1});
+  }
+ }
+
+ Set(DATA=${DATA},FUNC=${CONTEXT};ZT=${T};IFTIME=${res});
+ Set(CDR(x-data)={${DATA:1}});
+
+ #include "ael/func/FUNC.INC"
+ return;
+} // macro WorkDays(Spec,f1,f2,ZT)

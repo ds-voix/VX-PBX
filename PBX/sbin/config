@@ -1,0 +1,100 @@
+#!/bin/sh
+umask 133
+# Manage PBX config behind nginx
+
+if [ "$1" == "cp" ]; then
+  f=`readlink -f "${4}" | egrep '^/pbx/conf/'`
+  [ $? -ne 0 ] && exit
+
+  mkdir "${4}" 2>/dev/null && chmod 755 "${4}"
+
+  f=`readlink -f "${2}" | egrep "^${4}|^/tmp/"`
+  [ $? -ne 0 ] && exit
+
+  f=`readlink -f "${3}" | egrep "^${4}"`
+  [ $? -ne 0 ] && exit
+
+  f=`file -i "${2}" | grep ': text/plain'`
+  if [ $? -eq 0 ]; then
+    cp "${2}" "${3}"
+  fi
+
+  if [ $? -eq 0 ]; then
+    chmod 644 "${3}"
+    echo 'OK'
+  fi
+fi
+
+if [ "$1" == "mv" ]; then
+  f=`readlink -f "${4}" | egrep '^/pbx/conf(/|$)'`
+  [ $? -ne 0 ] && exit
+
+  mkdir "${4}" 2>/dev/null && chmod 755 "${4}"
+
+  f=`readlink -f "${2}" | egrep "^${4}|^/tmp/"`
+  [ $? -ne 0 ] && exit
+
+  f=`readlink -f "${3}" | egrep "^${4}"`
+  [ $? -ne 0 ] && exit
+
+  mv "${2}" "${3}"
+  if [ $? -eq 0 ]; then
+    echo 'OK'
+  fi
+fi
+
+if [ "$1" == "rm" ]; then
+  f=`readlink -f "${3}" | egrep '^/pbx/conf/'`
+  [ $? -ne 0 ] && exit
+
+  f=`readlink -f "${2}" | egrep "^${3}"`
+  [ $? -ne 0 ] && exit
+
+  rm -f "${2}"
+  if [ $? -eq 0 ]; then
+    echo 'OK'
+  fi
+fi
+
+if [ "$1" == "rmdir" ]; then
+  f=`readlink -f "${3}" | egrep '^/pbx/conf/'`
+  [ $? -ne 0 ] && exit
+
+  f=`readlink -f "${2}" | egrep "^${3}"`
+  [ $? -ne 0 ] && exit
+
+  rmdir "${2}"
+  if [ $? -eq 0 ]; then
+    echo 'OK'
+  fi
+fi
+
+if [ "$1" == "mkdir" ]; then
+  f=`readlink -f "${3}" | egrep '^/pbx/conf/'`
+  [ $? -ne 0 ] && exit
+
+  f=`readlink -f "${2}" | egrep "^${3}"`
+  [ $? -ne 0 ] && exit
+
+  mkdir -p "${2}"
+  if [ $? -eq 0 ]; then
+    chmod 755 "${2}"
+    echo 'OK'
+  fi
+fi
+
+if [ "$1" == "touch" ]; then
+  f=`readlink -f "${3}" | egrep '^/pbx/conf/'`
+  [ $? -ne 0 ] && exit
+
+  mkdir "${3}" 2>/dev/null && chmod 755 "${3}"
+
+  f=`readlink -f "${2}" | egrep "^${3}"`
+  [ $? -ne 0 ] && exit
+
+  touch "${2}"
+  if [ $? -eq 0 ]; then
+    chmod 644 "${2}"
+    echo 'OK'
+  fi
+fi

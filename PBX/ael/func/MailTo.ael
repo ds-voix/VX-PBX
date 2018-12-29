@@ -1,0 +1,38 @@
+// Send email notification. Address=to:from
+// Call fn, if one specified
+macro MailTo(Address,Subject,Body,fn) {
+ NoOp(${leg1}>>${leg2} FUNCTION MailTo(${Address},${Subject},${Body},${fn}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+ Set(DATA=${DATA},FUNC=${CONTEXT});
+ Set(CDR(x-data)={${DATA:1}});
+
+ Set(To=${CUT(Address,:,1)});
+ Set(From=${CUT(Address,:,2)});
+
+ Set(RESULT=Invalid To);
+ if ("${To}"="") return;
+
+ if ("${From}"="") {
+  Set(LOCAL(From)=pbx@`/bin/hostname -f`);
+ }
+
+ RESULT=OK;
+
+
+ Set(LOCAL(Subject)=${EVAL(${Subject})});
+ Set(LOCAL(Body)=${EVAL(${Body})});
+
+ Set(LOCAL(Subject)=${STRREPLACE(Subject,%CID,${leg1})});
+ Set(LOCAL(Subject)=${STRREPLACE(Subject,%DID,${leg2})});
+
+ Set(LOCAL(Body)=${STRREPLACE(Body,%CID,${leg1})});
+ Set(LOCAL(Body)=${STRREPLACE(Body,%DID,${leg2})});
+
+ System(/usr/local/sbin/mailer -f "${From}" -t "${To}" -s "${Subject}" --charset "UTF-8" -b "${Body}");
+
+ #include "ael/func/FUNC.INC"
+ return;
+} // macro MailTo(Address,Subject,Body,fn)

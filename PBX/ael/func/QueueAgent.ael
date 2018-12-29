@@ -1,0 +1,116 @@
+// Add|unpause queue agent
+// insert into "Func" values ('090','ALL',NULL,'AgentOn','3370303','444','3370303*444','Func(090.1)');
+// Q*459*3370303
+macro AgentOn(Queue,Line,Device,fn) {
+ NoOp(${leg1}>>${leg2} FUNCTION AgentOn(${Queue},${Line},${Device},${fn}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+ if ("${from}"="transfer") { // Pass transfers to queue
+  &queue(${Queue},,,);
+  return;
+ }
+
+ Answer;
+ if ("${Line}"="") Set(LOCAL(Line)=${cid});
+ if ("${Device}"="") Set(LOCAL(Device)=${dnid});
+ DEVICE_STATE(Custom:${Device})=INUSE;
+
+ Set(ODBC_EXTEN(${Line},${BIND},DND)=0);
+ ClearHash(ext);
+ Set(HASH(ext)=${ODBC_EXTEN(${Line})},${BIND});
+ if ("${BIND}"!="") Set(LOCAL(Line)=!${BIND}+${Line});
+
+//  AddQueueMember(${Queue},LOCAL/${Line}@iax/n,3,,${Queue}*${Line},hint:Q*${Line}*${Queue}@blf); // Make distinct slots for upper queues
+  AddQueueMember(${Queue},LOCAL/${Line}@iax/n,,,${Queue}*${Line});
+ Set(RESULT=${AQMSTATUS});
+ if ("${RESULT}"!="NOSUCHQUEUE") {
+  UnpauseQueueMember(${Queue},LOCAL/${Line}@iax/n,,AgentOn);
+  Set(RESULT=${UPQMSTATUS});
+  if ("${RESULT}"="UNPAUSED") RESULT=OK;
+ } else RESULT=ERR;
+
+ NoOp(RESULT=${RESULT});
+
+ if ("${fn}"="") return;
+ #include "ael/func/FUNC.INC"
+ return;
+} // macro AgentOn(Queue,Line,Device,fn)
+
+// Remove|pause queue agent
+// insert into "Func" values ('090','ALL',NULL,'AgentOff','3370303','444','3370303*444','Func(090.1)');
+macro AgentOff(Queue,Line,Device,fn) {
+ NoOp(${leg1}>>${leg2} FUNCTION AgentOff(${Queue},${Line},${Device},${fn}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+ if ("${Line}"="") Set(LOCAL(Line)=${cid});
+ if ("${Device}"="") Set(LOCAL(Device)=${Queue}*${cid});
+ DEVICE_STATE(Custom:${Device})=NOT_INUSE;
+
+ if ("${BIND}"!="") Set(LOCAL(Line)=!${BIND}+${Line});
+ RemoveQueueMember(${Queue},LOCAL/${Line}@iax/n);
+ Set(RESULT=${RQMSTATUS});
+ if ("${RESULT}"!="REMOVED") {
+  PauseQueueMember(${Queue},LOCAL/${Line}@iax/n,,AgentOff);
+  Set(RESULT=${PQMSTATUS});
+  if ("${RESULT}"="PAUSED") RESULT=OK;
+ } else RESULT=OK;
+
+ NoOp(RESULT=${RESULT});
+
+ if ("${fn}"="") return;
+ #include "ael/func/FUNC.INC"
+ return;
+} // macro AgentOff(Queue,Line,Device,fn)
+
+macro AgentSwitch(Queue,Line,Device,fn) {
+ NoOp(${leg1}>>${leg2} FUNCTION AgentSwitch(${Queue},${Line},${Device},${fn}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+ if ("${from}"="transfer") { // Pass transfers to queue
+  &queue(${Queue},,,);
+  return;
+ }
+
+ Answer;
+ if ("${Line}"="") Set(LOCAL(Line)=${cid});
+ if ("${Device}"="") Set(LOCAL(Device)=${dnid});
+ if ("${DEVICE_STATE(Custom:${Device})}"="INUSE") {
+  &AgentOff(${Queue},${Line},${Device},${fn});
+ } else {
+  &AgentOn(${Queue},${Line},${Device},${fn});
+ }
+
+ return;
+}
+
+// Call function "f1" if there are more then "Threshold" agents in queue, "f2" otherwise
+// insert into "Func" values ('090','ALL',NULL,'QueueActive','3300058','_Dial(LOCAL/28584@iax/n|10|TtKkfgm)','_Dial(LOCAL/28585@iax/n|10|TtKkfgm)','0');
+macro QueueActive(QueueName,f1,f2,Threshold) {
+ NoOp(${leg1}>>${leg2} FUNCTION QueueActive(${QueueName},${f1},${f2},${Threshold}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+
+ Set(RESULT=Invalid QueueName);
+ if ("${QueueName}"="") return;
+ Set(RESULT=Invalid Func);
+ if ("${f1}"="") return;
+ if ("${f2}"="") Set(f2=${f1});
+
+ if ("${Threshold}"="") Set(Threshold=0);
+
+ RESULT=OK;
+
+ Set(LOCAL(fn)=${f2});
+ if (${QUEUE_MEMBER(${name},logged)}>${Threshold}) Set(LOCAL(fn)=${f1});
+
+ #include "ael/func/FUNC.INC"
+ return;
+} // macro QueueActive(QueueName,f1,f2,Threshold)

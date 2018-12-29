@@ -1,0 +1,406 @@
+#!/usr/bin/python -u
+# -*- coding: utf-8 -*-
+
+# Copyright (C) 2012-2014 Dmitry Svyatogorov ds@vo-ix.ru
+
+#    This program is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU Affero General Public License as
+#    published by the Free Software Foundation, either version 3 of the
+#    License, or (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU Affero General Public License for more details.
+#
+#    You should have received a copy of the GNU Affero General Public License
+#    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+import sys
+import time
+import psycopg2
+import psycopg2.extras
+from psycopg2.extensions import adapt
+import ldap
+ldap.set_option(ldap.OPT_REFERRALS, 0)
+
+from socket import *
+
+## first you must open a connection to the server
+host='91.142.84.124'
+user='cn=atslst,dc=dengionline,dc=com'
+passwd='AB3NzaC1yc2EAAAABIwAAAQEAzsqkAdzbaioqmaOPMX0j406X'
+KeyField='entryUUID' # Use UUID instead of baseDN
+
+lastmsg = ''
+cur = None
+
+def log(msg):
+  global lastmsg
+  if msg != lastmsg:
+    print time.asctime(), msg
+    lastmsg = msg
+
+
+#print time.asctime(), 'Started LDAP >> SQL handler'
+log("Started LDAP >> SQL handler")
+
+while True:
+  try:
+    l = ldap.open(host)
+    l.protocol_version = ldap.VERSION3
+    l.simple_bind_s(user,passwd)
+  except ldap.INVALID_CREDENTIALS:
+    print "Authorization incorrect."
+  except ldap.LDAPError, e:
+#    print time.asctime(), "LDAP ERROR:\n", e
+    log("LDAP BIND ERROR:\n" + str(e))
+    time.sleep(60)
+    continue
+
+
+  ## The next lines will also need to be changed to support your search requirements and directory
+  baseDN = "ou=Users,ou=OxObjects,dc=dengionline,dc=com"
+  searchScope = ldap.SCOPE_SUBTREE
+  ## retrieve all attributes - again adjust to your needs - see documentation for more options
+  # IPPhone mail IPPhoneM IPPhoneRestriction displayName mobile IPPhonePass
+  retrieveAttributes = [ KeyField, '*' ]
+
+  #(&(objectClass=inetOrgPerson)(objectClass=OXUserObject))
+  searchFilter = "(&(|(!(isEnabled=*))(isEnabled=TRUE))(isATSable=TRUE))"
+
+  try:
+    connect = psycopg2.connect("dbname='pbx' user='postgres' password=''")
+  except:
+#    print time.asctime(), "SQL ERROR: Can not connect to database"
+    log("SQL ERROR: Can not connect to database")
+    time.sleep(60)
+    continue
+  cur = connect.cursor(cursor_factory=psycopg2.extras.DictCursor)
+  cur1 = connect.cursor()
+
+
+  cur.execute("""
+  BEGIN TRANSACTION;
+  --  ISOLATION LEVEL SERIALIZABLE
+  delete from "LDAP.DN" where "New" = False;
+  update "LDAP.DN" set "New" = False;
+  """)
+
+  try:
+    res = l.search_s(baseDN, searchScope, searchFilter, retrieveAttributes)
+
+    for attr in res:
+      dn = ''
+      if (KeyField != ''):
+        dn = adapt(attr[1][KeyField][0])
+      if (dn == ''):
+        dn = adapt(attr[0])
+
+#      print """insert into "LDAP.DN" ("DN") values (%s) returning "NRec";""" % (dn)
+
+      cur.execute("""
+      delete from "LDAP.DN" where ("DN" = %s) and ("New" = True);
+      insert into "LDAP.DN" ("DN") values (%s) returning "NRec";
+      """ % (dn, dn))
+      rows = cur.fetchall()
+      NRec = rows[0]['NRec']
+
+      for k in attr[1].keys():
+        cur.execute("""
+        insert into "LDAP" values (%s, %s, %s);
+        """ % (NRec, adapt(k), adapt(attr[1][k][0])) )
+#        print """insert into "LDAP" values (%s, %s, %s);""" % (NRec, adapt(k), adapt(attr[1][k][0]))
+
+
+  except ldap.LDAPError, e:
+    log("LDAP SEARCH ERROR:\n" + str(e))
+    time.sleep(60)
+    continue
+
+### CID requires special processing, as they are placed in separate subtree :/~ ###
+  ## The next lines will also need to be changed to support your search requirements and directory
+  baseDN = "ou=CityPhones,dc=dengionline,dc=com"
+  searchScope = ldap.SCOPE_SUBTREE
+  ## retrieve all attributes - again adjust to your needs - see documentation for more options
+  # IPPhone mail IPPhoneM IPPhoneRestriction displayName mobile IPPhonePass
+  retrieveAttributes = None
+  searchFilter = "(&(isEnabled=TRUE)(objectClass=cityPhone))"
+  try:
+    res = l.search_s(baseDN, searchScope, searchFilter, retrieveAttributes)
+
+    for attr in res:
+      dn = attr[0]
+      phones = []
+      for k in attr[1].keys():
+        if (k == 'telephoneNumber'):
+          cid = "".join(i for i in attr[1][k][0] if i in "0123456789+")
+          cid = cid[len(cid)-10:]
+        if (k == 'description'):
+          descr = attr[1][k][0]
+
+        if ((k == 'IPPhone') | (k =='IPPhoneM')):
+          for p in attr[1][k]:
+            phones.append(p)
+
+      phones.sort()
+      prev = ''
+      for p in phones:
+      #  print p,cid,descr
+        if p == prev:
+          continue
+        prev = p
+        try:
+          cur.execute("""
+          delete from "LDAP.DN" where ("DN" = '%s') and ("New" = True);
+          insert into "LDAP.DN" ("DN") values ('%s') returning "NRec";
+          """ % ('CID_' + p, 'CID_' + p))
+          rows = cur.fetchall()
+          NRec = rows[0]['NRec']
+
+          cur.execute("""
+          insert into "LDAP" values (%s, %s, %s);
+          """ % (NRec, adapt('CID_FromExten'), adapt(p)) )
+          cur.execute("""
+          insert into "LDAP" values (%s, %s, %s);
+          """ % (NRec, adapt('CID_ToExten'), adapt(p)) )
+          cur.execute("""
+          insert into "LDAP" values (%s, %s, %s);
+          """ % (NRec, adapt('CID_CID'), adapt(cid)) )
+          cur.execute("""
+          insert into "LDAP" values (%s, %s, %s);
+          """ % (NRec, adapt('CID_Description'), adapt(descr)) )
+        except psycopg2.Error, e:
+          log("SQL ERROR:\n" + str(e.pgerror))
+
+  except ldap.LDAPError, e:
+#    print time.asctime(), "LDAP ERROR:\n", e
+    log("LDAP SEARCH-CID ERROR:\n" + str(e))
+    time.sleep(60)
+    continue
+
+  cur.execute("COMMIT TRANSACTION;")
+#  cur.execute("ROLLBACK TRANSACTION;")
+  l.unbind_s()
+
+  sql = ''
+  clear_sip = []
+
+  # DELETE (using key fields only)
+  cur.execute("""
+  select "DICT"."Id", "DICT"."Table", "DICT"."Field", "LDAP"."Value"
+   from "LDAP.DN"
+   join "LDAP" on ("LDAP"."LDAP.DN" = "LDAP.DN"."NRec")
+   join "LDAP.DICT" as "DICT" on ("LDAP"."Name" = "DICT"."LDAP") and ("DICT"."Id" >= 0)
+   where ("DICT"."Key")
+        and NOT("DN" in (select "DN" from "LDAP.DN" where "New" = True))
+   order by "LDAP.DN"."NRec","DICT"."Id", "DICT"."Table";
+  """)
+  fetch = cur.fetchall()
+  for row in fetch:
+    sql += """DELETE FROM "%s" where "%s" = %s;\n""" % (row['Table'], row['Field'], adapt(row['Value']))
+
+  # UPDATE
+  cur.execute("""
+  select "DICT"."Id", "DICT"."Table", "DICT"."Field", "DICT"."Order", "DICT"."Key", "DICT"."Filter",
+         "LDAPN"."Value" as "NEW",
+         (select "Value" from "LDAP" where ("LDAP.DN" = "OLD"."NRec") and ("Name" = "LDAPN"."Name")) as "OLD"
+   from "LDAP.DN" AS "NEW"
+   join "LDAP.DN" as "OLD" on (("NEW"."DN" = "OLD"."DN") and ("NEW"."New" = True) and ("OLD"."New" = False))
+   join "LDAP" as "LDAPN" on ("LDAPN"."LDAP.DN" = "NEW"."NRec")
+   join "LDAP.DICT" as "DICT" on ("LDAPN"."Name" = "DICT"."LDAP") and ("DICT"."Id" >= 0)
+-- We must always retrieve binding!
+   where NOT("LDAPN"."Value" = COALESCE((select "Value" from "LDAP" where ("LDAP.DN" = "OLD"."NRec") and ("Name" = "LDAPN"."Name")), ''))
+         or ("DICT"."Key")
+   order by "NEW"."NRec","DICT"."Id", "DICT"."Table", "DICT"."Field", "DICT"."Order";
+  """)
+  ident = ''
+  table = ''
+  set = ''
+  where = ''
+  sip_peer=''
+
+  fetch = cur.fetchall()
+  for row in fetch:
+    if (row['Id'] != ident) or (row['Table'] != table):
+      if (table != ''):
+        if (set.strip(',') != ''):
+          sql += """UPDATE "%s" SET %s WHERE %s;\n""" % (table, set.strip(','), where)
+          clear_sip.append(sip_peer)
+        ident = row['Id']
+        table = row['Table']
+        set=''
+        where=''
+        sip_peer=''
+      else:
+        ident = row['Id']
+        table = row['Table']
+    if (row['Key']):
+      where = """"%s" = %s""" % (row['Field'], adapt(row['OLD']))
+      if (row['Table'] == 'sip'):
+        sip_peer = row['OLD'] # So, we forget old peer. New one must send "register"
+#      continue # NO! Key field may be changed!
+
+    if (row['NEW'] != row['OLD']):
+  # !!! NOTE THIS DONGLE !!!
+      if (row['Filter'] != ''):
+        mob = "".join(i for i in row['NEW'] if i in row['Filter']) # "0123456789+"
+        set += ""","%s"='%s'""" % (row['Field'], mob)
+      else:
+        set += ""","%s"=%s""" % (row['Field'], adapt(row['NEW']))
+
+  # INSERT
+  cur.execute("""
+   select "DICT"."Id" as "ID", "DICT"."Table" as "TABLE", "DICT"."Field" as "Field", "LDAP"."Value" as "Value", "DICT"."Default" as "Default", "LDAP.DN"."NRec" as "NR", "DICT"."Order" as "Order", "DICT"."Key" as "Key", "DICT"."Filter" as "Filter"
+   from "LDAP.DN"
+   join "LDAP" on ("LDAP"."LDAP.DN" = "LDAP.DN"."NRec")
+   join "LDAP.DICT" as "DICT" on ("LDAP"."Name" = "DICT"."LDAP") and ("DICT"."Id" >= 0)
+   where NOT("DN" in (select "DN" from "LDAP.DN" where "New" = False))
+
+  UNION -- defaults
+   select "DICT"."Id" as "ID", "DICT"."Table" as "TABLE", "DICT"."Field" as "Field", "DICT"."Default" as "Value", "DICT"."Default" as "Default", "LDAP.DN"."NRec" as "NR", 9223372036854775807 as "Order", "DICT"."Key" as "Key", "DICT"."Filter" as "Filter"
+   from "LDAP.DN"
+   join "LDAP" on ("LDAP"."LDAP.DN" = "LDAP.DN"."NRec")
+   join "LDAP.DICT" as "DICT" on ("DICT"."LDAP" = '*') and ("DICT"."Id" >= 0)
+   where NOT("DN" in (select "DN" from "LDAP.DN" where "New" = False))
+   and ("DN" in (select "DN" from "LDAP.DN"
+                   join "LDAP.DICT" as "DICT" on ("LDAP"."Name" = "DICT"."LDAP") and ("DICT"."Id" >= 0)
+                   where "New" = True))
+
+   order by "NR", "ID", "TABLE", "Field", "Order";
+  """)
+  nr = ''
+  ident = ''
+  table = ''
+  field = ''
+  fields = ''
+  values = ''
+  dup = ''
+  skip = True
+
+  fetch = cur.fetchall()
+  for row in fetch:
+    if ((row['NR'] != nr) or (row['ID'] != ident) or (row['TABLE'] != table)):
+      if (table != ''):
+        if not skip:
+          sql += """INSERT INTO "%s"(%s) VALUES (%s);\n""" % (table, fields.strip(','), values.strip(','))
+        nr = row['NR']
+        ident = row['ID']
+        table = row['TABLE']
+        fields=''
+        values=''
+        skip = True
+      else:
+        nr = row['NR']
+        ident = row['ID']
+        table = row['TABLE']
+    if (row['Field'] != field): # Get only first value, if multiple
+      field = row['Field']
+      fields += ',"%s"' % field
+    else:
+      continue
+
+    # !!! Insert only records with valid keys !!!
+    if (row['Key'] and (row['Value'] != '')):
+      # Try to bypass the uniqueless from LDAP
+      sql += """DELETE FROM "%s" WHERE "%s"=%s;\n""" % (row['TABLE'], row['Field'], adapt(row['Value']))
+      cur1.execute("""select * from "%s" where "%s"=%s;""" % (row['TABLE'], row['Field'], adapt(row['Value'])))
+      if (cur1.rowcount > 0): # !!!DUP FOUND!!!
+#        sql += """DELETE FROM "%s" WHERE "%s"=%s;\n""" % (row['TABLE'], row['Field'], adapt(row['Value']))
+        dup += """TABLE "%s" FIELD "%s" = %s\n""" % (row['TABLE'], row['Field'], adapt(row['Value']))
+      skip = False
+
+  # !!! NOTE THIS DONGLE !!!
+    if (row['Filter'] != ''):
+      mob = "".join(i for i in row['Value'] if i in row['Filter']) # "0123456789+"
+      values += """,'%s'""" % mob
+    else:
+      values += """,%s""" % adapt(row['Value'])
+
+  if (sql != ''):
+    log("SQL:\n" + str(sql))
+
+  done = False
+  while (not done) and (sql != ''):
+    try:
+      if connect != None:
+        cur.execute("""
+--        BEGIN TRANSACTION;
+        %s
+        COMMIT TRANSACTION;
+        """ % sql)
+        done = True
+        log("SQL COMMIT TRANSACTION")
+    except psycopg2.Error, e:
+      log("SQL ERROR:\n" + str(e.pgerror))
+      if connect != None:
+        connect.close()
+      time.sleep(60)
+
+      try:
+        connect = psycopg2.connect("dbname='pbx' user='postgres' password=''")
+        cur = connect.cursor()
+      except:
+        log("SQL ERROR: Can not connect to database")
+        time.sleep(60)
+
+  if (dup != ''):
+    log("!!!DUPES FOUND:\n" + dup)
+
+  # Clear staled sip accounts
+  try:
+    # Login to AMI
+    ast = socket(AF_INET, SOCK_STREAM)
+    HOST = '127.0.0.1'
+    PORT = 5038
+    ast.connect((HOST, PORT))
+    data = ""
+    while "\r\n" not in data:
+      data += ast.recv(1024)
+#    print repr(data)
+
+    params = ["Action: login",
+              "Events: off",
+              "Username: clear_sip",
+              "Secret: sip_clear"]
+
+    ast.send("\r\n".join(params) + "\r\n\r\n")
+    # receive login response
+    data = ""
+    while "\r\n" not in data:
+      data += ast.recv(1024)
+#      print repr(data)
+
+    for s in clear_sip:
+      # PRUNE
+      params = ["Action: Command",
+                "Command: sip prune realtime peer %s" % s,
+                "ActionID: %s01" % s]
+
+      ast.send("\r\n".join(params) + "\r\n\r\n")
+      # receive login response
+      data = ""
+      while "\r\n" not in data:
+        data += ast.recv(1024)
+#      print repr(data)
+      # LOAD
+      params = ["Action: Command",
+                "Command: sip show peer %s load" % s,
+                "ActionID: %s02" % s]
+
+      ast.send("\r\n".join(params) + "\r\n\r\n")
+      # receive login response
+      data = ""
+      while "\r\n" not in data:
+        data += ast.recv(1024)
+#      print repr(data)
+
+    ast.send("Action: Logoff\r\n\r\n")
+    ast.close()
+  except error, E:
+#  except Exception,e:
+    log("AMI ERROR: " + str(E))
+  log("OK")
+  time.sleep(300)
+
+sys.exit(0)

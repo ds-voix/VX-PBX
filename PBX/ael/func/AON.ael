@@ -1,0 +1,48 @@
+// USSR "AON" CID request simulation
+// insert into "Func" values ('090','ALL',NULL,'AON','9','3','','Indication(86400)');
+macro AON(Wait,Count,NoPlayback,fn) {
+ NoOp(${leg1}>>${leg2} FUNCTION AON(${Wait},${Count},${NoAnswer},${fn}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+
+ Set(CHANNEL(language)=${DEFAULT_LANG});
+ RESULT=OK;
+
+ if ("${Wait}"!="") {
+  Ringing();
+  Wait(${Wait});
+ }
+
+// if ("${NoAnswer}"!="1") {
+  Answer;
+// }
+
+ Wait(0.3);
+
+  switch ("${Count}") {
+   case "1":
+    PlayTones(0/200,500/140,0/2000); break;
+   case "2":
+    PlayTones(0/200,500/140,0/200,500/140,0/2000); break;
+   case "3":
+    PlayTones(0/200,500/140,0/200,500/140,0/200,500/140,0/2000); break;
+   case "4":
+    PlayTones(0/200,500/140,0/200,500/140,0/200,500/140,0/200,500/140,0/2000); break;
+   case "5":
+    PlayTones(0/200,500/140,0/200,500/140,0/200,500/140,0/200,500/140,0/200,500/140,0/2000); break;
+   default:
+    Playback(aon);
+  }
+
+ Wait(2);
+ StopPlayTones();
+ if ("${NoPlayback}"="") {
+  Playback(connected);
+  Wait(1);
+ }
+
+ #include "ael/func/FUNC.INC"
+ return;
+} // macro AON(Wait,Count,NoAnswer,fn)

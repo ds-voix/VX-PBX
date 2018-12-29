@@ -1,0 +1,132 @@
+// BlackList trap (play some activity imitation with no answer)
+// insert into "Func" values ('090','ALL','TrapBL','greeting/Priv1&greeting/Priv2');
+macro TrapBL(Play,MOH,Time) {
+ NoOp(${leg1}>>${leg2} FUNCTION TrapBL(${Play},${MOH},${Time}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+ Progress();
+ Set(CHANNEL(language)=${DEFAULT_LANG});
+ if ("${Play}"!="") Playback(${Play},noanswer);
+ MusicOnHold(${MOH},${Time});
+ return;
+} // TrapBL(Play,MOH,Time)
+
+
+// Switch route basing on BlackList
+// insert into "Func" values ('090','ALL','DialBL','581','583:584:585','^58','1');
+macro DialBL(Route,RouteBL,RegExp,Threshold) {
+ NoOp(${leg1}>>${leg2} FUNCTION DialBL(${Route},${RouteBL},${RegExp},${Threshold}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+
+ Set(RESULT=Invalid Route);
+ if ("${Route}"="") return;
+ if ("${RouteBL}"="") Set(LOCAL(RouteBL)=${Route});
+ Set(LOCAL(timeout)=${CUT(Threshold,:,2)});
+ if ("${timeout}"="") Set(LOCAL(timeout)=1 day);
+ Set(LOCAL(Threshold)=${CUT(Threshold,:,1)});
+ if ("${Threshold}"="") Set(LOCAL(Threshold)=1);
+
+
+ if (${ODBC_BL(${leg1},${BIND},${timeout},${RegExp})}>${Threshold}) {
+  Set(LOCAL(Route)=${RouteBL});
+ }
+
+ RESULT=OK;
+
+ for (LOCAL(i)=1; ${i}<=${FIELDQTY(Route,:)}; LOCAL(i)=${i}+1) {
+  Set(LOCAL(rt)=${rt}&LOCAL/${CUT(Route,:,${i})}@iax/n);
+ }
+
+// Set(__NO_TRANSFER=${NoTransfer});
+ Set(CHANNEL(language)=${DEFAULT_LANG});
+ Dial(${rt:1},,fg); // Spawn parallel calls
+
+ if ("${DIALSTATUS}"="ANSWER") RESULT=OK; else Set(RESULT=${DIALSTATUS});
+ return;
+} // DialBL(Route,RouteBL,RegExp,Threshold)
+
+
+// The same as DialBL, except of ${Route} specifies full one
+// insert into "Func" values ('090','ALL','RouteBL','581@iax','583@iax:584@iax','^58','1');
+macro RouteBL(Route,RouteBL,RegExp,Threshold) {
+ NoOp(${leg1}>>${leg2} FUNCTION DialBL(${Route},${RouteBL},${RegExp},${Threshold}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+
+ Set(RESULT=Invalid Route);
+ if ("${Route}"="") return;
+ if ("${RouteBL}"="") Set(LOCAL(RouteBL)=${Route});
+ Set(LOCAL(timeout)=${CUT(Threshold,:,2)});
+ if ("${timeout}"="") Set(LOCAL(timeout)=1 day);
+ Set(LOCAL(Threshold)=${CUT(Threshold,:,1)});
+ if ("${Threshold}"="") Set(LOCAL(Threshold)=1);
+
+
+ if (${ODBC_BL(${leg1},${BIND},${timeout},${RegExp})}>${Threshold}) {
+  Set(LOCAL(Route)=${RouteBL});
+ }
+
+ RESULT=OK;
+
+ for (LOCAL(i)=1; ${i}<=${FIELDQTY(Route,:)}; LOCAL(i)=${i}+1) {
+  Set(LOCAL(rt)=${rt}&LOCAL/${CUT(Route,:,${i})}/n);
+ }
+
+ Set(__NO_TRANSFER=${NoTransfer});
+ Set(CHANNEL(language)=${DEFAULT_LANG});
+ Dial(${rt:1},,fg); // Spawn parallel calls
+
+ if ("${DIALSTATUS}"="ANSWER") RESULT=OK; else Set(RESULT=${DIALSTATUS});
+ return;
+} // RouteBL(Route,RouteBL,RegExp,Threshold)
+
+
+// Switch func basing on BlackList
+// insert into "Func" values ('090','ALL',NULL,'BL','_Dial(LOCAL/28583@iax/n|300|TtKkfg):_Dial(LOCAL/28584@iax/n|300|TtKkfg)','_Dial(LOCAL/28531@iax/n|300|TtKkfg)','^58','1:7 day');
+macro BL(Func,FuncBL,RegExp,Threshold) {
+ NoOp(${leg1}>>${leg2} FUNCTION BL(${Func},${FuncBL},${RegExp},${Threshold}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+
+ Set(RESULT=Invalid Func);
+ if ("${Func}"="") return;
+ if ("${FuncBL}"="") Set(LOCAL(FuncBL)=${Func});
+
+ Set(LOCAL(timeout)=${CUT(Threshold,:,2)});
+ if ("${timeout}"="") Set(LOCAL(timeout)=1 day);
+ Set(LOCAL(Threshold)=${CUT(Threshold,:,1)});
+ if ("${Threshold}"="") Set(LOCAL(Threshold)=1);
+
+
+ NoOp(ODBC_BL(${leg1},${BIND},${timeout},${RegExp}) > ${Threshold});
+ if (${ODBC_BL(${leg1},${BIND},${timeout},${RegExp})}>${Threshold}) {
+  Set(LOCAL(Func)=${FuncBL});
+  Set(DATA=${DATA},FUNC=${CONTEXT},RE=${RegExp},MATCH=1);
+ } else Set(DATA=${DATA},FUNC=${CONTEXT};RE=${RegExp};MATCH=0);
+
+ Set(CDR(x-data)={${DATA:1}});
+
+ RESULT=OK;
+
+ for (LOCAL(i)=1; ${i} <= ${FIELDQTY(Func,:)}; LOCAL(i)=${i}+1) {
+  Set(LOCAL(fn)=${CUT(Func,:,${i})});
+
+  #include "ael/func/FUNC.INC"
+  if ("${RESULT}"="OK"|"${RESULT}"="NOANSWER") break;
+ }
+
+ if (("${RESULT}"!="OK") & ("${FallBack}"!="")) {
+  Set(LOCAL(fn)=${FallBack});
+  #include "ael/func/FUNC.INC"
+ }
+ return;
+} // BL(Func,FuncBL,RegExp,Threshold)

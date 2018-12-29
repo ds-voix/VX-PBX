@@ -1,0 +1,166 @@
+// Implement trigger with Z-Level
+
+/*
+insert into "Func" values ('4440','28583','ZTriggerSet','WorkDays','trigger/ztrigger','0');
+insert into "Func" values ('4441','28583','ZTriggerSet','WorkDays','trigger/ztrigger','1');
+insert into "Func" values ('4442','28583','ZTriggerSet','WorkDays','trigger/ztrigger','z');
+insert into "Func" values ('444','28583','ZTriggerSet','WorkDays','trigger/ztrigger');
+*/
+macro ZTriggerSet(var,play,SetLevel) {
+ NoOp(${leg1}>>${leg2} FUNCTION ZTriggerSet(${var},${play},${SetLevel}));
+// Trigger "var" variable between "enabled", "disabled" values (or 0 | 1 if omitted) in ODBC_VAR()
+// Third level is "NONE"
+// Play "trigger/${play}_1" | "trigger/${play}_0"
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+ if (${var}) {
+
+  Set(LOCAL(value)=${ODBC_VAR(${var})});
+
+  if ("${SetLevel}"="") {
+   if ("${value}"="1") {
+    Set(LOCAL(value)=0);
+    } else {
+     if ("${value}"="0") {
+      Set(LOCAL(value)=);
+     } else Set(LOCAL(value)=1);
+   }
+  } else {
+   switch (${SetLevel}) {
+    case 1:
+     Set(LOCAL(value)=1);
+     break;
+    case 0:
+     Set(LOCAL(value)=0);
+     break;
+    default:
+     Set(LOCAL(value)=);
+   }
+  }
+  Set(ODBC_VAR(${var})=${value});
+
+  if ("${play}"!="") {
+   Answer;
+   Set(CHANNEL(language)=${DEFAULT_LANG});
+   Playback(${play}${value});
+  }
+ }
+ return;
+} // macro ZTriggerCheck(var,play)
+
+macro ZTriggerCheck(var,play) {
+ NoOp(${leg1}>>${leg2} FUNCTION ZTriggerCheck(${var},${play}));
+// Check (Playback) current ZTrigger state
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+ Set(LOCAL(value)=${ODBC_VAR(${var})});
+
+ if ("${play}"!="") {
+  Answer;
+  Set(CHANNEL(language)=${DEFAULT_LANG});
+  Playback(${play}${value});
+ }
+
+ return;
+} // macro ZTriggerCheck(var,play)
+
+// insert into "Func" values ('090','ALL','DialZTrigger','WorkDays','583:584:585','531','1');
+macro DialZTrigger(var,Route,FallBack,NoTransfer) {
+ NoOp(${leg1}>>${leg2} FUNCTION DialZTrigger(${var},${Route},${FallBack},${NoTransfer}));
+// Route call according to ZTrigger state
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+
+ Set(RESULT=Invalid VAR);
+ if ("${var}"="") return;
+
+ switch (${ODBC_VAR(${var})}) {
+  case 1:
+   Set(LOCAL(rt)=${CUT(Route,:,1)});
+   break;
+  case 0:
+   Set(LOCAL(rt)=${CUT(Route,:,2)});
+   break;
+  default:
+   Set(LOCAL(rt)=${CUT(Route,:,3)});
+ }
+
+ Set(RESULT=Invalid Route);
+ if ("${rt}"="") return;
+ Set(__NO_TRANSFER=${NoTransfer});
+
+ RESULT=OK;
+ Dial(LOCAL/${rt}@iax/n,,fg);
+ Set(RESULT=${DIALSTATUS});
+
+ if ("${DIALSTATUS}"!="ANSWER") {
+  if ("${FallBack}"!="") Dial(LOCAL/${FallBack}@iax/n,,fg);
+ }
+
+ if ("${DIALSTATUS}"="ANSWER") RESULT=OK; else Set(RESULT=${DIALSTATUS});
+ return;
+} // macro DialZTrigger(var,Route,FallBack,NoTransfer)
+
+// insert into "Func" values ('090','ALL','ZTrigger','WorkDays','_Dial(LOCAL/28583@iax/n|300|TtKkfg):_Dial(LOCAL/28584@iax/n|300|TtKkfg):_Dial(LOCAL/28531@iax/n|300|TtKkfg)','_Dial(LOCAL/28531@iax/n|300|TtKkfg)','1');
+macro ZTrigger(var,Func,FallBack,NoTransfer) {
+ NoOp(${leg1}>>${leg2} FUNCTION ZTrigger(${var},${Func},${FallBack},${NoTransfer}));
+// Call function according to ZTrigger state
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+
+ Set(RESULT=Invalid VAR);
+ if ("${var}"="") return;
+
+ switch (${ODBC_VAR(${var})}) {
+  case 1:
+   Set(LOCAL(fn)=${CUT(Func,:,1)});
+   break;
+  case 0:
+   Set(LOCAL(fn)=${CUT(Func,:,2)});
+   break;
+  default:
+   Set(LOCAL(fn)=${CUT(Func,:,3)});
+ }
+
+ Set(RESULT=Invalid Route);
+ if ("${fn}"="") return;
+ Set(__NO_TRANSFER=${NoTransfer});
+
+ RESULT=OK;
+
+ Set(LOCAL(fnc)=${CUT(fn,\(,1)});
+ Set(LOCAL(arg)=${CUT(fn,\(,2)});
+ Set(LOCAL(arg)=${CUT(arg,\),1)});
+
+//  Set(LOCAL(args)=${REPLACE(arg,\|,\,)}); Don't work in 1.6.2
+ Set(LOCAL(args)=${CUT(arg,|,1)});
+ for (LOCAL(i)=2; ${i} <= ${FIELDQTY(arg,|)}; LOCAL(i)=${i}+1) {
+  Set(LOCAL(args)=${args},${CUT(arg,|,${i})});
+ }
+ &${fnc}(${args});
+ NoOp(RESULT=${RESULT});
+
+ if (("${RESULT}"!="OK") & ("${FallBack}"!="")) {
+  Set(LOCAL(fnc)=${CUT(FallBack,\(,1)});
+  Set(LOCAL(arg)=${CUT(FallBack,\(,2)});
+  Set(LOCAL(arg)=${CUT(arg,\),1)});
+
+//  Set(LOCAL(args)=${REPLACE(arg,\|,\,)}); Don't work in 1.6.2
+  Set(LOCAL(args)=${CUT(arg,|,1)});
+  for (LOCAL(i)=2; ${i} <= ${FIELDQTY(arg,|)}; LOCAL(i)=${i}+1) {
+   Set(LOCAL(args)=${args},${CUT(arg,|,${i})});
+  }
+  &${fnc}(${args});
+  NoOp(RESULT=${RESULT});
+ }
+
+ return;
+} // macro ZTrigger(var,Func,FallBack,NoTransfer)

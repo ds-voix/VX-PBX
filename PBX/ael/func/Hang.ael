@@ -1,0 +1,16 @@
+// Answer, play tones,then call fn
+// Returns "OK" when Func RESULT=OK, or explanation string in other case
+// insert into "Func" values ('090','ALL',NULL,'Indication','FIFO(mark|1234)');
+macro Hang() {
+ NoOp(${leg1}>>${leg2} FUNCTION Hang());
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+ Set(DATA=${DATA},FUNC=${CONTEXT});
+ Set(CDR(x-data)={${DATA:1}});
+
+ h=h;
+ goto exten|${h}|1;
+ return;
+} // macro Hang()

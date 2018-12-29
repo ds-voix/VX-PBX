@@ -1,0 +1,20 @@
+// insert into "Func" values ('090','ALL','NotifyURL','10.0.0.2:80');
+macro NotifyURL(URL) {
+ NoOp(${leg1}>>${leg2} FUNCTION NotifyURL(${URL}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+ Set(CURLOPT(httptimeout)=5);
+ Set(LOCAL(time)=${STRFTIME(${EPOCH},,%d.%m.%Y %H:%M:%S)});
+ Set(HASH(QUERY)=${ODBC_ABC(${leg1})});
+ Set(LOCAL(city)=${HASH(QUERY,Region)});
+ Set(LOCAL(operator)=${HASH(QUERY,Owner)});
+ Set(LOCAL(abcdef)=${HASH(QUERY,ABCDEF)});
+ Set(LOCAL(direcion)=${HASH(QUERY,Direction)});
+
+
+ Set(LOCAL(res)=${CURL(http://${URL},cid=${leg1}&time=${time}&operator=${operator}&city=${city}&abcdef=${abcdef}&direcion=${direcion})});
+ RESULT=OK;
+ return;
+} // macro NotifyURL(URL)

@@ -1,0 +1,200 @@
+// Answer, play greeting file, then route to "r1"
+macro intro(play,r1) {
+ NoOp(FUNCTION intro(${play},${r1}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+ Answer;
+ Set(CHANNEL(language)=${DEFAULT_LANG});
+ local num=;
+ if ("${play}"!="") Read(LOCAL(num),${play},7,,,3);
+
+ if ("${num}"!="") {
+  Set(LOCAL(num)=${ODBC_ALIAS_I(${leg2},${num})});
+  Set(LOCAL(level)=${ODBC_LEVEL(${num})});
+  if (${level}<3) { // Local call
+   Dial(LOCAL/${num}@iax/n,,fg);
+   if ("${DIALSTATUS}"="ANSWER") RESULT=OK; else Set(RESULT=${DIALSTATUS});
+   if ("${DIALSTATUS}"="BUSY") Playback(busy);
+   return;
+  } else {
+   if ("${num:0:1}"="*") {
+    Set(LOCAL(level)=${ODBC_LEVEL(${num:1})});
+    if (${level}<3) { // Local call
+     Dial(LOCAL/${num:1}@iax/n,,fg);
+     if ("${DIALSTATUS}"="ANSWER") RESULT=OK; else Set(RESULT=${DIALSTATUS});
+     if ("${DIALSTATUS}"="BUSY") Playback(busy);
+     return;
+    }
+   }
+  }
+ }
+ if ("${r1}"="") return;
+ Dial(LOCAL/${r1}/n,,fg);
+ return;
+} // macro intro(play,r1)
+
+// Answer, play one of Intro files, swithing them by Key, if one
+// Allow to dial internal num, while playing
+// Returns "OK" when Dial() succeeds, or explanation string in other case
+// insert into "Func" values ('090','ALL','DialIntro','greeting/1rus:greeting/1eng','583:585','9','1');
+macro DialIntro(Intro,Route,Key,NoTransfer) {
+ NoOp(FUNCTION DialIntro(${Intro},${Route},${Key},${NoTransfer}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+
+ Set(RESULT=Invalid Intro);
+ if ("${Intro}"="") return;
+ Set(RESULT=Invalid Route);
+ if ("${Route}"="") return;
+
+ Set(CHANNEL(language)=${DEFAULT_LANG});
+ Set(__NO_TRANSFER=${NoTransfer});
+
+ RESULT=OK;
+
+ local pos=1;
+
+ Answer;
+
+read:
+ Set(LOCAL(play)=${CUT(Intro,:,${pos})});
+ Set(LOCAL(rt)=${CUT(Route,:,${pos})});
+
+ if ("${play}"!="") Read(LOCAL(num),${play},7,,,3);
+ if ("${Key}"!=""&"${num}"="${Key}") {
+  local pos=${pos}+1;
+  if (${pos}>${FIELDQTY(Intro,:)}) local pos=1;
+  goto read;
+ }
+
+ if ("${num}"!="") {
+  Set(LOCAL(num)=${ODBC_ALIAS_I(${leg2},${num})});
+  Set(LOCAL(level)=${ODBC_LEVEL(${num})});
+  if (${level}<3) { // Local call
+   Dial(LOCAL/${num}@iax/n,,fg);
+   if ("${DIALSTATUS}"="ANSWER") RESULT=OK; else Set(RESULT=${DIALSTATUS});
+   if ("${DIALSTATUS}"="BUSY") Playback(busy);
+   return;
+  } else {
+   if ("${num:0:1}"="*") {
+    Set(LOCAL(level)=${ODBC_LEVEL(${num:1})});
+    if (${level}<3) { // Local call
+     Dial(LOCAL/${num:1}@iax/n,,fg);
+     if ("${DIALSTATUS}"="ANSWER") RESULT=OK; else Set(RESULT=${DIALSTATUS});
+     if ("${DIALSTATUS}"="BUSY") Playback(busy);
+     return;
+    }
+   }
+  }
+ }
+ if ("${rt}"="") return;
+
+ Dial(LOCAL/${rt}@iax/n,,fg);
+ if ("${DIALSTATUS}"="ANSWER") RESULT=OK; else Set(RESULT=${DIALSTATUS});
+ return;
+} // DialIntro(Intro,Route,Key,NoTransfer)
+
+// Answer, play one of Intro files, swithing them by Key, if one
+// Allow to dial internal num, while playing
+// Returns "OK" when Func RESULT=OK, or explanation string in other case
+// insert into "Func" values ('090','ALL','DialIntro','greeting/1rus:greeting/1eng','menu(1):menu(101)','9','1');
+macro Intro(Intro,Func,Key,NoTransfer) {
+ NoOp(${leg1}>>${leg2} FUNCTION Intro(${Intro},${Func},${Key},${NoTransfer}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+
+ Set(DATA=${DATA},FUNC=${CONTEXT});
+ Set(CDR(x-data)={${DATA:1}});
+
+ Set(RESULT=Invalid Intro);
+ if ("${Intro}"="") return;
+ Set(RESULT=Invalid Func);
+ if ("${Func}"="") return;
+
+ Set(CHANNEL(language)=${DEFAULT_LANG});
+ Set(__NO_TRANSFER=${NoTransfer});
+
+ RESULT=OK;
+
+ local pos=1;
+
+ local loop=0;
+ Answer;
+
+read:
+ local loop=${loop}+1;
+ local num=;
+ Set(LOCAL(play)=${CUT(Intro,:,${pos})});
+ Set(LOCAL(play)=${CUT(play,\;,${loop})});
+
+ Set(LOCAL(fn)=${CUT(Func,:,${pos})});
+
+ if ("${play}"!="") Read(LOCAL(num),${play},7,,,1);
+ if ("${Key}"!=""&"${num}"="${Key}") {
+  local pos=${pos}+1;
+  if (${pos}>${FIELDQTY(Intro,:)}) local pos=1;
+  goto read;
+ }
+
+ if ("${num}"!="") {
+  Set(LOCAL(num)=${ODBC_ALIAS_I(${leg2},${num})});
+  Set(LOCAL(level)=${ODBC_LEVEL(${num})});
+  if (${level}<3) { // Local call
+   Dial(LOCAL/${num}@iax/n,,fg);
+   if ("${DIALSTATUS}"="ANSWER") {
+    RESULT=OK;
+    return;
+   } else {
+    if ("${DIALSTATUS}"="BUSY") {
+     Playback(busy);
+    } else {
+     if ("${DIALSTATUS}"!="NOANSWER") {
+      Playback(menu/wrong-number);
+     }
+    }
+    Set(RESULT=${DIALSTATUS});
+   }
+//   return;
+   if (${loop}>1) local loop=${loop}-1;
+   goto read;
+  } else {
+   if ("${num:0:1}"="*") {
+    Set(LOCAL(level)=${ODBC_LEVEL(${num:1})});
+    if (${level}<3) { // Local call
+     Dial(LOCAL/${num:1}@iax/n,,fg);
+     if ("${DIALSTATUS}"="ANSWER") {
+      RESULT=OK;
+      return;
+     } else {
+      if ("${DIALSTATUS}"="BUSY") {
+       Playback(busy);
+      } else {
+       if ("${DIALSTATUS}"!="NOANSWER") {
+        Playback(menu/wrong-number);
+       }
+      }
+      Set(RESULT=${DIALSTATUS});
+     }
+//     return;
+     if (${loop}>1) local loop=${loop}-1;
+     goto read;
+    }
+   } else {
+    Playback(menu/wrong-number);
+    if (${loop}>1) local loop=${loop}-1;
+    goto read;
+   }
+  }
+ }
+ if ("${play}"!=""|${loop}=1) goto read; // Hello may be absent
+ if ("${fn}"="") return;
+
+ #include "ael/func/FUNC.INC"
+ return;
+} // macro Intro(Intro,Func,Key,NoTransfer)

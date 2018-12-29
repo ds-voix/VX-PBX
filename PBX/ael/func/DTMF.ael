@@ -1,0 +1,18 @@
+// Process DTMF input
+macro DTMF(MaxDigits,Prefix,Timeout,fn) {
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+ Set(DATA=${DATA},FUNC=${CONTEXT});
+ Set(CDR(x-data)={${DATA:1}});
+
+ num=;
+ Read(num,dial,${MaxDigits},i,,${Timeout});
+ if ("${num}"!="") {
+  Set(LOCAL(fn)=${STRREPLACE(fn,%DTMF,${num})});
+ }
+
+ #include "ael/func/FUNC.INC"
+ return;
+} // macro DTMF(MaxDigits,Prefix,Timeout,fn)

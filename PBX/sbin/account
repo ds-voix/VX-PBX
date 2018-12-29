@@ -1,0 +1,97 @@
+#!/bin/bash
+umask 177
+
+# account NAME [up|down] [in|out|]
+
+BIND=$1
+if [ "${BIND}" == "" ]; then
+  echo "Usage: $0 BIND [up|down] [in|out|]"
+  exit
+fi
+
+if [ "$2" == "" ]; then
+  # Check current status
+  r=`psql -U postgres -qtc "SELECT \"NRec\",\"Channel\" from \"Route\" where (\"BIND\" = '$BIND' and \"NRec\" < 0) order by \"NRec\" desc;" pbx | sed -r 's/[\s]+/ /g;s/[|]/ >> channel #/'`
+  if [ "${r}" != "" ]; then
+    echo "EGRESS DOWN:"
+    echo "${r}"
+  else
+    r=`psql -U postgres -qtc "SELECT \"NRec\",\"Channel\",\"Description\" from \"Route\" where (\"BIND\" = '$BIND') order by \"NRec\" desc;" pbx | sed -r 's/[ ]+/ /g;s/[|]/ >> channel #/'`
+    if [ "${r}" != "" ]; then
+      echo "EGRESS UP:"
+      echo "${r}"
+    else
+      echo "EGRESS NOT SET: No routes for \"${BIND}\""
+    fi
+  fi
+
+  p=`psql -U postgres -qtc "SELECT \"Exten\",\"Description\" from \"Func\" where \"BIND\" = '_' and \"Exten\" in (SELECT \"Exten\" from \"Func\" where \"BIND\" = '$BIND' and \"Exten\" ~ '^[0-9]{10}$');" pbx | sed -r 's/[\s]+/ /g'`
+  if [ "${p}" != "" ]; then
+    echo ''
+    echo "INGRESS DOWN:"
+    echo "${p}"
+  else
+    echo ''
+  fi
+
+  r=`psql -U postgres -qtc "SELECT \"Exten\",\"Description\" from \"Func\" where \"BIND\" = '${BIND}' and \"Exten\" ~ '^[0-9]{10}$' and NOT \"Exten\" in (SELECT \"Exten\" from \"Func\" where \"BIND\" = '_');" pbx | sed -r 's/[\s]+/ /g'`
+  if [ "${r}" != "" ]; then
+    echo "INGRESS UP:"
+    echo "${r}"
+  fi
+
+  if [ "${p}${r}" == "" ]; then
+    echo "INGRESS NOT SET: No one DID for \"${BIND}\""
+  fi
+
+  exit
+fi
+
+[ "${BIND}" == "REDIRECT" ] && exit
+
+[ "$2" == "down" ] || del='-- '
+[ "${del}" == "" ] && d='DOWN' || d='UP'
+
+if [ "$3" != "out" ]; then
+  p=`psql -U postgres -qtc "SELECT array_to_string( ARRAY(SELECT \"Exten\" from \"Func\" where \"BIND\" = '$BIND' and \"Exten\" ~ '^[0-9]{10}$'), ',');" pbx | egrep -o '[0-9,]+'`
+  if [ $? -gt 0 ]; then
+    echo "No DID found for \"$BIND\""
+    exit 1
+  fi
+
+  (
+   echo "${del}[Func ${p}] ; `basename $0` \"${BIND}\""
+   echo " Macro = Indication ; (fn,Timeout,NoTransfer,Limit)"
+   echo " P1 = NonExistent"
+   echo " P2 = 86400"
+  ) | /usr/local/sbin/upsert -b '_' -IDT  | psql -U postgres -q pbx
+
+  echo "INGRESS ${d} for DID [$p]"
+fi
+
+if [ "$3" != "in" ]; then
+  r=`psql -U postgres -qtc "SELECT \"NRec\" from \"Route\" where \"BIND\" = '$BIND' order by \"NRec\" desc LIMIT 1;" pbx | egrep -o '[0-9]+'`
+
+  if [ $? -gt 0 ]; then
+    echo "No Route found for \"$BIND\""
+    r=`psql -U postgres -qtc "SELECT \"Exten\" from \"Func\" where (\"BIND\" = '$BIND' and \"Exten\" ~ '^[0-9]{10}$') order by \"Exten\" LIMIT 1;" pbx | egrep -o '[0-9]+'`
+    if [ $? -eq 0 ]; then
+      echo "Using DID-BASED \"-${r}\""
+    else
+      echo "No DID found for \"$BIND\""
+      exit 1
+    fi
+  fi
+
+  (
+   echo "${del}[Route -${r}] ; `basename $0` \"${BIND}\""
+   echo " Order = -1"
+   echo " Channel = 666 ; LOCAL"
+   echo " Mangle = 666  ; CONGESTION"
+   echo " Level = 0"
+   echo " Insecure = 1"
+   echo " NoMore = 1"
+  ) | /usr/local/sbin/upsert -b "${BIND}" -IDT | psql -U postgres -q pbx
+
+  echo "EGRESS ${d} at [Route -${r}]"
+fi

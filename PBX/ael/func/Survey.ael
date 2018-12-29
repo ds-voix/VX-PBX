@@ -1,0 +1,43 @@
+// Implement survey on particular Exten to qualify the service quality
+// insert into "Func" values ('090','ALL','Survey','28583','1','digits/million:digits/milliona:digits/millionov',1);
+// Remember Delay must be 0 for Exten participated in survey!
+macro Survey(Exten,SurveyList,Prompts,NoTransfer) {
+ NoOp(${leg1}>>${leg2} FUNCTION Survey(${Exten},${SurveyList},${Prompts},${NoTransfer}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+ Set(RESULT=Invalid Exten);
+ if ("${Exten}"="") return;
+
+ Set(RESULT=Invalid SurveyList);
+ if ("${SurveyList}"="") return;
+
+ RESULT=OK;
+
+ Set(LOCAL(SurveyStart)=${CUT(Prompts,:,1)});
+ Set(LOCAL(SurveyPrompt)=${CUT(Prompts,:,2)});
+ Set(LOCAL(SurveyThanks)=${CUT(Prompts,:,3)});
+
+ Set(__NO_TRANSFER=${NoTransfer});
+ Set(__NO_SLEEP=1); // Don't implement sleep in delayed Exten - return immediately to proceed survey
+ Set(CHANNEL(language)=${DEFAULT_LANG});
+
+ if ("${SurveyStart}"!="") Playback(${SurveyStart});
+
+ Dial(LOCAL/${Exten}@iax/n,,rfg); // Call specified Exten
+
+ if ("${DIALSTATUS}"="ANSWER") RESULT=OK; else Set(RESULT=${DIALSTATUS});
+
+ if ("${DIALSTATUS}"="ANSWER") { // Implement survey
+  local num=;
+  if ("${SurveyPrompt}"!="") Read(LOCAL(num),${SurveyPrompt},1,,,7);
+  Set(num=${FILTER(1-5,${num})});
+  if ("${num}"!="") { // Write mark
+   Set(ODBC_SURVEY(${SurveyList},${Exten},${CDR(uniqueid)})=${num});
+   if ("${SurveyThanks}"!="") Playback(${SurveyThanks});
+  }
+ }
+
+ return;
+} // macro Survey(Exten,SurveyList,Prompts,NoTransfer)

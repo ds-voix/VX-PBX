@@ -1,0 +1,62 @@
+// Tries to dial phone with lowest load from ${Route}
+// Try to call ${FallBack} number when no answer was detected
+// Returns "OK" when Dial() succeeds, or explanation string in other case
+// Pay attention to set REAL EXTENSIONS here, as load must be counted
+// insert into "Func" values ('090','ALL','DialMinLoad','28583:28584:28585','531','0');
+
+macro DialMinLoad(Route,FallBack,NoTransfer) {
+ NoOp(${leg1}>>${leg2} FUNCTION DialMinLoad(${Route},${FallBack},${NoTransfer}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+
+ Set(RESULT=Invalid Route);
+ if ("${Route}"="") return;
+ Set(__NO_TRANSFER=${NoTransfer});
+ Set(__IN_QUEUE=1);
+
+ RESULT=OK;
+
+ Set(LOCAL(timeout)=${CUT(RR,:,2)});
+ if ("${timeout}"="") Set(LOCAL(timeout)=${ODBC_CONST(timeout-dial)});
+ if ("${timeout}"="") Set(LOCAL(timeout)=300);
+ Set(LOCAL(RR)=${CUT(RR,:,1)});
+
+ local dialed=;
+
+ if ("${BIND}"!="") {
+  Set(LOCAL(bnd)=${BIND}+);
+ } else {
+  local bnd=;
+ }
+
+ for (LOCAL(j)=1; ${j}<=${FIELDQTY(Route,:)}; LOCAL(j)=${j}+1) {
+  local load=9999;
+  for (LOCAL(i)=1; ${i}<=${FIELDQTY(Route,:)}; LOCAL(i)=${i}+1) {
+   Set(LOCAL(rt)=${CUT(Route,:,${i})});
+   if (${REGEX("${rt}" ${dialed})}=1) continue;
+   // Check for target extension load
+   local count=${GROUP_COUNT(${bnd}${rt}@I)}+${GROUP_COUNT(${bnd}${rt}@O)};
+
+   if (${count}<${load}) {
+    local load=${count};
+    local rtt=${rt};
+    if (${load}=0) break;
+   }
+  }
+
+  Set(CHANNEL(language)=${DEFAULT_LANG});
+  Dial(LOCAL/${rtt}@iax/n,,fg);
+  Set(LOCAL(dialed)=${dialed} ${rtt});
+  if ("${DIALSTATUS}"="ANSWER") break;
+ }
+ Set(__IN_QUEUE=);
+
+ if ("${DIALSTATUS}"!="ANSWER") {
+  if ("${FallBack}"!="") Dial(LOCAL/${FallBack}@iax/n,,fg);
+ }
+
+ if ("${DIALSTATUS}"="ANSWER") RESULT=OK; else Set(RESULT=${DIALSTATUS});
+ return;
+} // DialMinLoad(Route,FallBack,NoTransfer)

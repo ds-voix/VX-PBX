@@ -1,0 +1,34 @@
+// Mailbox interface. Does recording when (CALLERID(number) != cid),
+// else redirects to VoiceMailMain(${cid}@${MailContext})
+macro VM(MailBox,MailContext,flags,fn) {
+ NoOp(${leg1}>>${leg2} FUNCTION VoiceMail VM(${MailBox},${MailContext},${flags},${fn}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+ Set(CHANNEL(language)=${DEFAULT_LANG});
+
+ if ("${MailContext}"="") {
+  Set(MailContext=${BIND});
+ }
+
+ if ("${MailBox}"="") {
+  Set(MailBox=${cid});
+ }
+
+ Set(DATA=${DATA},FUNC=${CONTEXT};BOX=${MailBox}@${MailContext});
+ Set(CDR(x-data)={${DATA:1}});
+
+ if (${MAILBOX_EXISTS(${MailBox}@${MailContext})}) {
+  if ("${CALLERID(number)}"!="${MailBox}") { // Record message
+   VoiceMail(${MailBox}@${MailContext},${flags});
+  } else { // Pass to mailbox
+   VoiceMailMain(s${MailBox}@${MailContext});
+  }
+ } else { // No mailbox attached
+  Playback(vm-isunavail);
+ }
+
+ #include "ael/func/FUNC.INC"
+ return;
+} // macro VM (MailBox,MailContext,flags,fn)

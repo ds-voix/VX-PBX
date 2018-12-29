@@ -1,0 +1,22 @@
+// Answer, test MOH
+macro PlayMoh(moh,time,NoAnswer) {
+ NoOp(${leg1}>>${leg2} FUNCTION PlayMoh(${moh},${time},${NoAnswer}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+
+ Set(DATA=${DATA},FUNC=${CONTEXT};MOH=${moh});
+ Set(CDR(x-data)={${DATA:1}});
+
+ if ("${NoAnswer}"!="1") {
+  Answer;
+ }
+
+ Wait(1);
+
+ Set(CHANNEL(language)=${DEFAULT_LANG});
+
+ MusicOnHold(${moh},${time});
+ return;
+} // macro PlayMoh(moh,time,NoAnswer)

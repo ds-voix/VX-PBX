@@ -1,0 +1,20 @@
+// Order the call to current did for ${Ext}
+macro OrderCall(Ext,NoAnswer) {
+ NoOp(${leg1}>>${leg2} FUNCTION OrderCall(${Ext},${NoAnswer}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+ Set(DATA=${DATA},FUNC=${CONTEXT};Ext=${Ext};DID=${dnid});
+ Set(CDR(x-data)={${DATA:1}});
+
+ if ("${Ext}"!="") {
+  System(/ast/call.pl ${Ext} ${dnid} ${BIND});
+ }
+
+ if ("${NoAnswer}"!="1") {
+  Answer;
+ }
+ Hangup;
+ return;
+} // macro OrderCall(Ext,NoAnswer)

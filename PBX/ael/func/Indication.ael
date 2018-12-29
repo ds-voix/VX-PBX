@@ -1,0 +1,75 @@
+// Answer, play tones,then call fn
+// Returns "OK" when Func RESULT=OK, or explanation string in other case
+// insert into "Func" values ('090','ALL',NULL,'Indication','FIFO(mark|1234)');
+macro Indication(fn,Timeout,NoTransfer,Limit) {
+ NoOp(${leg1}>>${leg2} FUNCTION Indication(${fn},${Timeout},${NoTransfer},${Limit}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+
+ Set(DATA=${DATA},FUNC=${CONTEXT};LIMIT=${Limit});
+ Set(CDR(x-data)={${DATA:1}});
+
+ if ("${Limit}"!="") {
+  Set(GROUP(Q)=${dnid});
+  if (${GROUP_COUNT(${dnid}@Q)}>${Limit}) {
+   Congestion();
+   return;
+  }
+ }
+
+ Set(RESULT=Invalid Func);
+ if ("${fn}"="") return;
+
+ Set(CHANNEL(language)=${DEFAULT_LANG});
+ Set(__NO_TRANSFER=${NoTransfer});
+
+ RESULT=OK;
+
+ local pos=1;
+
+ Answer;
+ Wait(1);
+ Ringing();
+ if ("${Timeout}"="") local Timeout=3;
+ Wait(${Timeout});
+
+ #include "ael/func/FUNC.INC"
+ return;
+} // macro Indication(fn,Timeout,NoTransfer,Limit)
+
+
+macro Tones(Tone,Timeout,NoAnswer,fn) {
+ NoOp(${leg1}>>${leg2} FUNCTION Tones(${Tone},${Timeout},${NoAnswer},${fn}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+ Set(DATA=${DATA},FUNC=${CONTEXT});
+ Set(CDR(x-data)={${DATA:1}});
+
+ Set(RESULT=Invalid Tone);
+ if ("${Tone}"="") return;
+
+ Set(CHANNEL(language)=${DEFAULT_LANG});
+
+ RESULT=OK;
+
+ local pos=1;
+
+ if ("${NoAnswer}"!=1) {
+  Answer;
+  Wait(1);
+ }
+
+ if ("${Timeout}"="") local Timeout=3;
+
+ PlayTones(${Tone});
+ Wait(${Timeout});
+
+ if ("${fn}"="") return;
+
+ #include "ael/func/FUNC.INC"
+ return;
+} // macro Tones(Tone,Timeout,NoAnswer,fn)

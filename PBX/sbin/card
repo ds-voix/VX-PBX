@@ -1,0 +1,84 @@
+#!/bin/bash
+umask 122
+
+CONF="$1"
+
+if [ "`dirname ${CONF}`" == "." ]; then
+  if [ `echo "${CONF}" | egrep -i '\.(conf|cfg|ini)$'` ] || [ `echo "${CONF}" | wc -m` -lt 7 ]; then
+    CONF=`find /pbx/conf/ -type f -name "${CONF}*"`
+    count=`echo "${CONF}" | wc -l`
+    if [ ${count} -gt 1 ]; then
+     echo "  Ambiguous \"$1\":"
+     echo "${CONF}"
+     exit 0
+    fi
+
+    [ "${CONF}" == "" ] && CONF="/pbx/conf/$1"
+    [ `echo "${CONF}" | egrep -i '\.(conf|cfg|ini)$'` ] || CONF="${CONF}.conf"
+  else  # Try to search inside content
+    count=`grep -Rli "${CONF}" /pbx/conf/ | wc -l`
+    [ ${count} -eq 0 ] && echo "Not found \"${CONF}\" inside configurations" && exit 0
+    if [ ${count} -gt 1 ]; then
+     echo "  Multiple \"${CONF}\" inside configurations:"
+     grep -Rli "${CONF}" /pbx/conf/
+     exit 0
+    fi
+    CONF="`grep -Rli "${CONF}" /pbx/conf/`"
+  fi
+fi
+
+mt=`stat -c '%Y' "${CONF}" 2>/dev/null || echo 0`
+f=`readlink -f "${CONF}" | egrep '^/pbx/conf/'`
+[ $? -ne 0 ] && exit
+
+echo `date "+%Y.%m.%d %H:%M"`"${SUDO_UID} ${SUDO_USER}: OPEN ${f}" >> /var/log/card.log
+
+if [ "$2" != "!" ] && [ "$2" != "!!" ]; then
+  nano -kiw -Y "/usr/share/nano/conf.nanorc" -o `dirname ${f}` "${CONF}"
+  mt1=`stat -c '%Y' "${CONF}" 2>/dev/null || echo 0`
+
+  if [ "$mt1" -eq "$mt" ]; then
+    echo 'Config unchanged'
+    exit 0
+  fi
+fi
+
+f=`readlink -f "${CONF}"`
+sql=`dirname ${f}`
+
+if [ "`dirname ${f}`" == "/pbx/conf" ]; then
+  BIND='.conf'
+  sql=/pbx/sql/`basename $sql`'+'`basename $f conf`'sql'
+else
+  BIND='.dir'
+  if [ "`dirname ${f}`" == "/pbx/conf/REDIRECT" ]; then
+    sql=/pbx/sql/`basename $sql`'+'`basename $f conf`'sql'
+  else
+    CONF="`dirname ${f}`"
+    sql=/pbx/sql/`basename $sql`'.sql'
+  fi
+fi
+
+[ "${SUDO_USER}" == "" ] && [ "${USER}" == "root" ] && SU=' -S' || SU=''
+
+# Force delete-insert for all objects
+if [ "$3" == "!" ] || [ "$2" == "!!" ]; then
+  DI=' -DI' || DI=''
+fi
+
+/usr/local/sbin/upsert -c "${CONF}" -b "$BIND" -TC${SU}${DI} > "${sql}"
+res=$?
+
+if [ ${res} -eq 0 ]; then
+  /usr/local/sbin/conf "${sql}"
+  res=$?
+else
+  echo `date "+%Y.%m.%d %H:%M"`"${SUDO_UID} ${SUDO_USER}: ERROR [${res}] in config ${f}" >> /var/log/card.log
+  exit
+fi
+
+if [ ${res} -eq 0 ]; then
+  echo `date "+%Y.%m.%d %H:%M"`"${SUDO_UID} ${SUDO_USER}: OK ${f}" >> /var/log/card.log
+else
+  echo `date "+%Y.%m.%d %H:%M"`"${SUDO_UID} ${SUDO_USER}: ERROR [${res}] in SQL ${sql}" >> /var/log/card.log
+fi

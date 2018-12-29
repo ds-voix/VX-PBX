@@ -1,0 +1,33 @@
+// Request CallerID(Name) from HTTP service. Use %CID%=cid, %DID%=dnid in URL.
+// insert into "Func" values ('090','ALL',NULL,'CNAM','http://a3.xxx.ru/CNAM?phone=%CID%','Func(090.1)');
+macro CNAM(URL,fn,Var) {
+ NoOp(${leg1}>>${leg2} FUNCTION CNAM(${URL},${fn},${Var}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+ Set(CURLOPT(httptimeout)=1);
+
+ Set(LOCAL(URL)=${STRREPLACE(URL,%CID%,${cid})});
+ Set(LOCAL(URL)=${STRREPLACE(URL,%DID%,${dnid})});
+
+ Set(CALLERID(name)=${CURL(${URL})});
+
+ Set(DATA=${DATA},FUNC=${CONTEXT});
+ Set(CDR(x-data)={${DATA:1}});
+
+ Set(RESULT=Invalid Func);
+ if ("${fn}"="") return;
+
+ RESULT=OK;
+
+ for (LOCAL(i)=1; ${i}<=${FIELDQTY(Var,\,)}; LOCAL(i)=${i}+1) {
+  Set(LOCAL(v)=${CUT(Var,\,,${i})});
+  Set(${CUT(v,=,1)}=${CUT(v,=,2)});
+ }
+
+ #include "ael/func/FUNC.INC"
+
+ if ("${hang}"="1") Hangup();
+ return;
+} // macro CNAM(URL,fn,Var)

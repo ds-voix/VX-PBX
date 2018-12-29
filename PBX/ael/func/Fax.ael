@@ -1,0 +1,68 @@
+// Fax machine (receive FAX >> mail)
+macro fax2mail (mailbox, filename, header,tiff) {
+ NoOp(${leg1}>>${leg2} FUNCTION fax2mail(${mailbox},${filename},${header},${tiff}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+
+ if ("${FAXSTATUS}"="SUCCESS") {
+  lvl=NOTICE;
+  Set(msg=RECEIVED FAX from cid=${sender} id="${REMOTESTATIONID}" pages=${FAXPAGES} res=${FAXRESOLUTION} rate=${FAXBITRATE} mode=${FAXMODE});
+ } else {
+  lvl=WARNING;
+  Set(msg=FAILED FAX from cid=${sender} dnid=${dnid} ERROR="${FAXERROR}");
+ }
+ Log(${lvl},${msg});
+
+ Set(file=${filename}.tiff);
+ if (${STAT(e,${file})}) {
+  if ("${tiff}"!="1") {
+   System(/usr/bin/tiff2pdf -o "${filename}.pdf" "${filename}.tiff");
+   if ("${SYSTEMSTATUS}"="SUCCESS") {
+    System(/bin/rm "${file}");
+    Set(file=${filename}.pdf);
+   }
+  }
+  if ("${mailbox}"!="") {
+   System(/usr/local/sbin/mailer -f "Ê·ÎÛ ${dnid} <fax@`/bin/hostname -f`>" -t "${mailbox}" -s "${header} Ê·ÎÛ œ‘ #${sender}" -a "${file}" --charset "KOI8-R" -b "œÃ’ﬁ≈Œœ ${FAXPAGES} ”‘“.");
+   if ("${SYSTEMSTATUS}"="SUCCESS") {
+    System(/bin/rm "${file}");
+   }
+  }
+ }
+ return;
+} // macro fax2mail ()
+
+macro fax (mailbox, id, header,tiff) {
+ NoOp(${leg1}>>${leg2} FUNCTION fax(${mailbox},${id},${header},${tiff}));
+// Fax machine, email to "mailbox", id is LOCALSTATIONID, header is LOCALHEADERINFO
+// Set tiff=1 to prevent pdf convertion
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  &fax2mail(${mailbox},${filename},${header},${tiff});
+  hang=1;
+  return;
+ }
+ Set(DATA=${DATA},FUNC=${CONTEXT};MAIL=${mailbox});
+ Set(CDR(x-data)={${DATA:1}});
+
+ Set(sender=${CALLERID(ani)});
+ if ("${sender}"="") {
+  Set(sender=${CALLERID(num)});
+ }
+
+ Set(recipient=${CALLERID(dnid)});
+ if ("${recipient}"="") {
+  Set(recipient=${dnid});
+ }
+
+ if ("${id}"!="") Set(LOCALSTATIONID=${id});
+ if ("${header}"!="") Set(LOCALHEADERINFO=${header});
+ Set(LOCAL(filename)=/var/tmp/${STRFTIME(${EPOCH},,%Y%m%d%H%M%S)}-${sender}-${recipient});
+ Set(CHANNEL(language)=${DEFAULT_LANG});
+ Answer;
+ ReceiveFAX(${filename}.tiff);
+
+ Hangup();
+ return;
+} // macro fax (mailbox, id, header)

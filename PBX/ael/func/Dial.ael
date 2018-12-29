@@ -1,0 +1,41 @@
+// Asterisk's Dial() envelope, able to to serial calls until "ANSWER" result
+// Returns "OK" when Dial() succeeds, or explanation string in other case
+// insert into "Func" values ('090','ALL','Dial','LOCAL/28583@iax/n:LOCAL/28585@iax/n','300','TtKkfg');
+
+macro _Dial(Spec,Timeout,Options,URL) {
+ NoOp(${leg1}>>${leg2} FUNCTION _Dial(${Spec},${Timeout},${Options},${URL}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+ Set(DATA=${DATA},FUNC=${CONTEXT};Spec=${Spec});
+ Set(CDR(x-data)={${DATA:1}});
+
+ Set(RESULT=Invalid Spec);
+ NoOp(Spec = ${Spec});
+ if ("${Spec}"="") return;
+
+ if ("${Timeout}"="") Timeout=300;
+ if ("${Options}"="") Options=fg;
+
+ RESULT=OK;
+
+ Set(LOCAL(qty)=${FIELDQTY(Spec,:)});
+// local qty=${qty}+1;
+
+ Set(CHANNEL(language)=${DEFAULT_LANG});
+
+ for (LOCAL(i)=1; ${i}<=${qty}; LOCAL(i)=${i}+1) {
+  Set(LOCAL(spc)=${CUT(Spec,:,${i})});
+  if ("${spc:-1:1}"="!") {
+   Set(LOCAL(spc)=${spc:0:-1}${leg2});
+  }
+  Dial(${spc},${Timeout},${Options},${URL});
+  Set(RESULT=${DIALSTATUS});
+  if ("${DIALSTATUS}"="ANSWER") break;
+ }
+
+// if ("${DIALSTATUS}"!="ANSWER") Dial(LOCAL/${FallBack}@iax/n,300,TtKkfg);
+ if ("${DIALSTATUS}"="ANSWER") RESULT=OK; else Set(RESULT=${DIALSTATUS});
+ return;
+} // macro _Dial(Spec,Timeout,Options,URL)

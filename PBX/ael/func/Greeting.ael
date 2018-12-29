@@ -1,0 +1,27 @@
+// Answer, play greeting file switching by "var", then route to "r1"|"r2"
+macro greeting(play,var,r1,r2) {
+ NoOp(${leg1}>>${leg2} FUNCTION greeting(${play},${var},${r1},${r2}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+ Set(LOCAL(status)=${ODBC_VAR(${var})});
+ if ("${status}"="") local status=0;
+ if ("${r2}"="") Set(LOCAL(r2)=${r1});
+
+ Answer;
+ Set(CHANNEL(language)=${DEFAULT_LANG});
+ num=;
+ if ("${play}"!="") Read(LOCAL(num),${play}${status},7,,,3);
+ if ("${num}"!="") {
+  Set(LOCAL(num)=${ODBC_ALIAS_I(${leg2},${num})});
+  Set(LOCAL(level)=${ODBC_LEVEL(${num})});
+  if (${level}<3) { // Local call
+   Dial(LOCAL/${num}@iax/n,,fg);
+   return;
+  }
+ }
+ if ("${r1}"="") return;
+ if (${status}=0) Dial(LOCAL/${r1}/n,,fg); else Dial(LOCAL/${r2}/n,,fg);
+ return;
+} // macro greeting(play,var,r1,r2)

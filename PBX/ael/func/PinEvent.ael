@@ -1,0 +1,37 @@
+// Enter pin-code and send it via HTTP POST event channel
+macro PinEvent(MaxDigits) {
+ NoOp(${leg1}>>${leg2} FUNCTION PinEvent(${MaxDigits}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+ if ("${URL}"="") {
+  return;
+ }
+ if ("${MaxDigits}"="") {
+  local MaxDigits=4;
+ }
+
+ Set(CHANNEL(language)=${DEFAULT_LANG});
+ local num=;
+ Read(LOCAL(num),vm-password,${MaxDigits},,,5);
+
+ Set(CURLOPT(httptimeout)=5);
+ Set(LOCAL(time)=${STRFTIME(${EPOCH},,%d.%m.%Y %H:%M:%S)});
+
+// NoOp(Event(${URL},linkedid=${uniqueid}&id=${UNIQUEID}&time=${time}&event=pincode&pincode=${num}&cid=${cid}&did=${dnid}&uuid=${UUID}));
+// Set(LOCAL(res)=${CURL(${URL},linkedid=${uniqueid}&id=${UNIQUEID}&time=${time}&event=pincode&pincode=${num}&cid=${cid}&did=${dnid}&uuid=${UUID})});
+// curl -w "%{http_code}" --data 'action=dnd&cid=206&enable=0&check=1' 188.227.101.17:8080
+ NoOp(SHELL(curl -w "%{http_code}" --data 'linkedid=${uniqueid}&id=${UNIQUEID}&time=${time}&event=pincode&pincode=${num}&cid=${cid}&did=${dnid}&uuid=${UUID}' ${URL}));
+ Set(LOCAL(res)=${SHELL(curl -w "%{http_code}" --data 'linkedid=${uniqueid}&id=${UNIQUEID}&time=${time}&event=pincode&pincode=${num}&cid=${cid}&did=${dnid}&uuid=${UUID}' ${URL})});
+
+ if ("${res}"="200") {
+  Set(ODBC_EXTEN(${HASH(ext,Exten)},${HASH(ext,BIND)},Enabled)=1);
+ }
+
+ Set(DATA=${DATA},FUNC=${CONTEXT};RES=${res});
+ Set(CDR(x-data)={${DATA:1}});
+
+ RESULT=OK;
+ return;
+} // macro Event(event)

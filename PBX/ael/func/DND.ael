@@ -1,0 +1,38 @@
+// Switches "DND" mode on Line On|Off
+// insert into "Func" values ('090','ALL',NULL,'SwitchDND','453','1');
+macro SwitchDND(Line,SetState) {
+ NoOp(${leg1}>>${leg2} FUNCTION SwitchDND(${Line},${SetState}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+ if ("${Line}"="") Set(LOCAL(Line)=${cid});
+
+ Set(DATA=${DATA},FUNC=${CONTEXT};LINE=${Line});
+ Set(CDR(x-data)={${DATA:1}});
+
+ ClearHash(ext);
+ Set(HASH(ext)=${ODBC_EXTEN(${Line},${BIND})});
+
+ if ("${HASH(ext,DND)}"!="1"&"${SetState}"!="0"|"${SetState}"="1") {
+  Set(ODBC_EXTEN(${HASH(ext,Exten)},${HASH(ext,BIND)},DND)=1);
+  ClearHash(ext);
+  Set(HASH(ext)=${ODBC_EXTEN(${Line})},${BIND});
+  if ("${BIND}"!="") Set(LOCAL(Line)=${BIND}+${Line});
+  DEVICE_STATE(Custom:${Line})=BUSY;
+  PauseQueueMember(,LOCAL/${Line}@iax/n,,SwitchDND);
+  PauseQueueMember(,LOCAL/!${Line}@iax/n,,SwitchDND);
+  &Event(dnd-on);
+//  Playback(ivr/transfer-on);
+ } else {
+  Set(ODBC_EXTEN(${HASH(ext,Exten)},${HASH(ext,BIND)},DND)=0);
+  ClearHash(ext);
+  Set(HASH(ext)=${ODBC_EXTEN(${Line})},${BIND});
+  if ("${BIND}"!="") Set(LOCAL(Line)=${BIND}+${Line});
+  UnpauseQueueMember(,LOCAL/${Line}@iax/n,,SwitchDND);
+  UnpauseQueueMember(,LOCAL/!${Line}@iax/n,,SwitchDND);
+  &Event(dnd-off);
+//  Playback(ivr/transfer-off);
+ }
+ return;
+} // macro SwitchDND(Line,SetState)

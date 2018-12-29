@@ -1,0 +1,5 @@
+#!/bin/sh
+rt=`asterisk -rx 'sip show peers' | egrep -v '^Name/username|^[0-9]+ sip peers' | egrep 'RT$' | cut -d ' ' -f 1 | cut -d '/' -f 1 | awk '{print "asterisk -rx ~sip show peer " $1 " load~ > /dev/null"}' | tr '~' '"'`
+
+asterisk -rx 'sip reload'
+echo "${rt}" | sh

@@ -1,0 +1,28 @@
+// Mangle CID and DID, following Mangle record
+macro Mangle(NRec,fn,SetCID,SetDNID) {
+ NoOp(${leg1}>>${leg2} FUNCTION Mangle(${NRec},${fn}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+
+ Set(RESULT=Invalid Func);
+ if ("${fn}"="") return;
+
+ RESULT=OK;
+
+ Set(HASH(mangle)=${ODBC_MANGLE(${NRec},${dnid},${cid})});
+
+ Set(__dnid=${HASH(mangle,DNID)});
+ Set(__cid=${HASH(mangle,CID)});
+
+ if("${SetDNID}"="1") Set(CALLERID(dnid)=${dnid});
+ if("${SetCID}"="1") Set(CALLERID(all)=${cid});
+ if("${SetCID}"="1") Set(CALLERID(ani)=${cid});
+
+ Set(DATA=${DATA},FUNC=${CONTEXT};MANGLE=${NRec});
+ Set(CDR(x-data)={${DATA:1}});
+
+ #include "ael/func/FUNC.INC"
+ return;
+} // macro Mangle(NRec,fn)

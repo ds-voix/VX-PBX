@@ -1,0 +1,34 @@
+// Conferencing via ConfBridge
+macro Conf(Name,Options,Template) {
+ NoOp(${leg1}>>${leg2} FUNCTION Conf(${Name},${Options},${Template}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+ Set(DATA=${DATA},FUNC=${CONTEXT};CONF=${Name});
+ Set(CDR(x-data)={${DATA:1}});
+
+ if ("${Name}"="") Set(LOCAL(Name)=CONF-${dnid});
+ if ("${Options}"="") local Options=M;
+ if ("${Template}"="") local Template=default_user;
+
+ Set(CONFBRIDGE(user,template)=${Template});
+ Set(CONFBRIDGE(user,music_on_hold_when_empty)=yes);
+ Set(CONFBRIDGE(user,announce_only_user)=no);
+
+ ConfBridge(${Name});
+ return;
+} // macro Conf(Name,Options,Template)
+
+macro conf(CONFNO) {
+// Pass channel to dynamically created conference ${CONFNO}
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+ Set(DATA=${DATA},FUNC=${CONTEXT};CONF=${CONFNO});
+ Set(CDR(x-data)={${DATA:1}});
+
+ MeetMe(${CONFNO},dM1);
+ return;
+} // macro conf(CONFNO)

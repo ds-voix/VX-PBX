@@ -1,0 +1,269 @@
+// Answer, play greeting file, then pass the ring to queue
+macro queue(name,play,noanswer,extra) {
+ NoOp(${leg1}>>${leg2} FUNCTION queue(${name},${play},${noanswer},${extra}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+ Set(CHANNEL(language)=${DEFAULT_LANG});
+
+ if ("${noanswer}"="") Answer;
+
+ local num=;
+ if ("${play}"!="") Read(LOCAL(num),${play},7,,,1);
+ if ("${num}"!="") {
+  Set(LOCAL(num)=${ODBC_ALIAS_I(${leg2},${num})});
+  Set(LOCAL(level)=${ODBC_LEVEL(${num},${cid},${BIND})});
+  if (${level}<3) { // Local call
+   Set(DATA=${DATA},FUNC=${CONTEXT};EXT=${num};LEVEL=${level});
+   Set(CDR(x-data)={${DATA:1}});
+   Dial(LOCAL/${num}@iax/n,,fg);
+   return;
+  }
+ }
+ if ("${name}"="") return;
+
+// Set(__NO_TRANSFER=1); !!!  a3.ptf.spb.ru TAXI [4454] FreeSwitch trunk !!!
+ Set(__IN_QUEUE=1);
+
+ Set(LOCAL(extra)=${REPLACE(extra,^,\,)});
+
+ Set(DATA=${DATA},FUNC=${CONTEXT};QUEUE=${name});
+ Set(CDR(x-data)={${DATA:1}});
+
+ &Event(queue);
+ Queue(${name},c${extra});
+
+ Set(__IN_QUEUE=);
+ return;
+} // macro queue(name,play)
+
+// Place call into FIFO-queue. Respawn queue handler, if it needed.
+// insert into "Func" values ('090','ALL','FIFO','TEST','28583','','1:digits/million:digits/milliona:digits/millionov');
+macro FIFO(queue_name,agent,moh,survey) {
+ NoOp(${leg1}>>${leg2} FUNCTION FIFO(${queue_name},${agent},${moh},${survey}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1; // Use of "LOCAL" fails as "we aren't within a Gosub routine"
+
+  Set(channel=${SHARED(call)});
+  if("${CHANNELS(${channel})}"!="") {  // Drop call
+   ChannelRedirect(${channel},Q_CALL,~~s~~,hang);
+  }
+  return;
+ }
+
+ Set(q=${FILTER(0-9A-Za-z-,${queue_name}-${cid}-${EPOCH})});
+ Set(cb=/var/spool/asterisk/tmp/Q-${q}.call);
+
+ if ("survey"!="") {
+  Set(LOCAL(SurveyList)=${CUT(survey,:,1)});
+  Set(LOCAL(SurveyStart)=${CUT(survey,:,2)});
+  Set(LOCAL(SurveyPrompt)=${CUT(survey,:,3)});
+  Set(LOCAL(SurveyThanks)=${CUT(survey,:,4)});
+ }
+
+ NoOp(TAIL=${CUT(CHANNEL,;,2)});
+
+ System(/bin/echo "Set: __BIND=${BIND}" >> ${cb});
+ System(/bin/echo "CallerID: ${cid}" >> ${cb});
+ System(/bin/echo "Channel: LOCAL/${agent}@Q_CALL" >> ${cb});
+ System(/bin/echo "Context: Q_BRIDGE" >> ${cb});
+ System(/bin/echo "Extension: ${CHANNEL}" >> ${cb});
+ System(/bin/echo "Priority: 1" >> ${cb});
+ System(/bin/echo "AlwaysDelete: yes" >> ${cb});
+ System(/bin/echo "Archive: no" >> ${cb});
+ System(/bin/echo "RetryTime: 3" >> ${cb});
+ System(/bin/echo "WaitTime: 1800" >> ${cb});
+ System(/bin/echo "MaxRetries: 5" >> ${cb});
+ System(/bin/echo "Set: tail=${CUT(CHANNEL,;,2)}" >> ${cb});
+ System(/bin/echo "Set: queue_name=${queue_name}" >> ${cb});
+ System(/bin/echo "Set: cid=${cid}" >> ${cb});
+ System(/bin/echo "Set: agent=${agent}" >> ${cb});
+ System(/bin/echo "Set: channel=${CHANNEL}" >> ${cb});
+ System(/bin/echo "Set: SurveyStart=${SurveyStart}" >> ${cb});
+ System(/bin/echo "Set: uniqueid=${uniqueid}" >> ${cb});
+ System(/bin/echo "Set: leg1=${leg1}" >> ${cb});
+ System(/bin/echo "Set: __NO_TRANSFER=1" >> ${cb});
+ System(/bin/echo "Set: callfile=/var/spool/asterisk/outgoing/Q-${q}.call" >> ${cb});
+
+ if ("${SurveyPrompt}"!="") {
+  System(/bin/echo "Set: __NO_SLEEP=1" >> ${cb}); // Don't implement sleep in delayed Exten - return immediately to proceed survey
+ }
+
+
+ local l = LOCK(${queue_name});
+  Set(GLOBAL(Q_${queue_name})=${GLOBAL(Q_${queue_name})}:${q});
+ local l = UNLOCK(${queue_name});
+
+ Progress();
+
+moh:
+ while ("${SHARED(bridged)}"="") {
+  if ("${GLOBAL(Q_${queue_name})}"!=""&${GROUP_COUNT(HANDLE@${queue_name})}=0) { // Respawn queue handler
+   Set(q=${FILTER(0-9A-Za-z-,${queue_name}-${agent}-${EPOCH})});
+   Set(cb=/var/spool/asterisk/tmp/Q-${q}.call);
+
+   System(/bin/echo "Set: __BIND=${BIND}" >> ${cb});
+   System(/bin/echo "CallerID: ${agent}" >> ${cb});
+   System(/bin/echo "Channel: LOCAL/${queue_name}@Q_HANDLE" >> ${cb});
+   System(/bin/echo "Context: Q_FAKE" >> ${cb});   // Never must be bridged
+   System(/bin/echo "Extension: ${agent}" >> ${cb});
+   System(/bin/echo "Priority: 1" >> ${cb});
+   System(/bin/echo "AlwaysDelete: yes" >> ${cb});
+   System(/bin/echo "Archive: no" >> ${cb});
+   System(/bin/echo "RetryTime: 3" >> ${cb});
+   System(/bin/echo "WaitTime: 1800" >> ${cb});
+   System(/bin/echo "MaxRetries: 5" >> ${cb});
+   System(/bin/echo "Set: callfile=/var/spool/asterisk/outgoing/Q-${q}.call" >> ${cb});
+
+   System(/bin/mv "${cb}" /var/spool/asterisk/outgoing/);
+  }
+
+  MusicOnHold(${moh},15);
+ }
+
+ if ("${SurveyPrompt}"!="") {
+  num=;
+  while("${num}"="") {
+   Read(LOCAL(num),${SurveyPrompt},1,,,7);
+   Set(num=${FILTER(1-5,${num})});
+  }
+  Set(ODBC_SURVEY(${SurveyList},${agent},${uniqueid})=${num});
+  if ("${SurveyThanks}"!="") Playback(${SurveyThanks});
+ }
+ return;
+
+prompt:
+ if ("${SurveyStart}"!="") Playback(${SurveyStart});
+ Set(SHARED(SurveyAnnounced)=1);
+ goto moh;
+
+first:
+// Playback(queue-youarenext);
+ goto moh;
+
+ return;
+} // macro FIFO(queue_name,agent,moh,survey)
+
+context Q_HANDLE {
+ h => {
+  Hangup();
+ }
+ _. => { // EXTEN = queue_name
+  Set(GROUP(${EXTEN})=HANDLE);
+  Set(queue_name=${EXTEN});
+  if ("${BIND}"!="") {
+   DEVICE_STATE(Custom:${BIND}+${queue_name})=INUSE;
+  } else {
+   DEVICE_STATE(Custom:${queue_name})=INUSE;
+  }
+
+  while (${FIELDQTY(GLOBAL(Q_${queue_name}),:)}>0) {
+   while (${GROUP_COUNT(CALL@${queue_name})}>0) { // wait for previous call
+    Wait(10);
+   }
+
+   l = LOCK(${queue_name});
+    Set(q=${CUT(GLOBAL(Q_${queue_name}),:,1)});
+    Set(GLOBAL(Q_${queue_name})=${CUT(GLOBAL(Q_${queue_name}),:,2-)}); // Remove first entry from queue
+   l = UNLOCK(${queue_name});
+
+   if ("${q}"!="") {
+    Set(cb=/var/spool/asterisk/tmp/Q-${q}.call);
+    NoOp(STAT(${cb}) = ${STAT(f,${cb})});
+    if ("${STAT(f,${cb})}"="1") { // File exists
+     Set(channel=${CUT(SHELL(/bin/echo -n `/bin/grep -e "^Extension:" "${cb}"`), ,2)});
+     NoOp(CHANNELS(${channel}) = ${CHANNELS(${channel})});
+     if("${CHANNELS(${channel})}"!="") {  // Place the call
+      ChannelRedirect(${channel},FIFO,~~s~~,first);   // Announce "You are next"
+      System(/bin/mv "${cb}" /var/spool/asterisk/outgoing/);
+      Wait(1);
+      if (${GROUP_COUNT(CALL@${queue_name})}=0) { // Some delay in call placement?
+       Wait(9);
+      }
+     }
+    }
+   }
+  }
+  System(/bin/rm -f "${callfile}");
+  if ("${BIND}"!="") {
+   DEVICE_STATE(Custom:${BIND}+${queue_name})=NOT_INUSE;
+  } else {
+   DEVICE_STATE(Custom:${queue_name})=NOT_INUSE;
+  }
+  Hangup();
+ }
+} // context Q_HANDLE
+
+context Q_CALL {
+ h => {
+  Hangup();
+ }
+ _. => { // EXTEN = agent
+  Set(GROUP(${queue_name})=CALL);
+  Set(SHARED(call,${channel})=${CHANNEL}); // This call must be dropped in case of caller hungs up
+//  Set(OUTBOUND_GROUP_ONCE=${queue_name}@CALL); // Note: this will lead to one-call per queue
+
+  // Leg definitions must be stored overall call processing!
+  Set(__uniqueid=${uniqueid});
+  Set(__leg1=${leg1});
+  Set(CDR(accountcode)=FIFO:${agent});
+  Set(CDR(userfield)=${uniqueid}>${leg1}>FIFO>agent:${agent});
+
+  while ("${CHANNELS(${channel})}"!="") {
+   Dial(LOCAL/${agent}@iax/n,1800,rfg); // Call specified agent M(Q_BRIDGE^${channel})
+   Wait(10);
+  }
+hang:
+  System(/bin/rm -f "${callfile}");
+  Hangup();
+ }
+} // context Q_CALL
+
+//context macro-Q_BRIDGE { // Such fucking sintaxis due to ael bug in calling M() dial macro!!!
+// Note: "LOCAL" statement don't work in inside macro
+// s => {
+//  Set(SHARED(bridged,${ARG1})=1);
+// }
+//} // context macro-Q_BRIDGE
+
+context Q_BRIDGE {
+ h => {
+  Hangup();
+ }
+ _. => { // EXTEN = CHANNEL
+  if ("${EXTEN}"="failed") {
+   fail=1;
+   Hangup();
+  }
+
+  if ("${SurveyStart}"!="") {
+   ChannelRedirect(${EXTEN},FIFO,~~s~~,prompt);
+   while ("${SHARED(SurveyAnnounced,${EXTEN})}"="") MusicOnHold(,1);
+   Playback(beep);
+  }
+
+  if ("${tail}"!="") {
+   Set(E=${EXTEN};${tail});
+  } else Set(E=${EXTEN});
+
+//  Set(SHARED(bridged,${EXTEN})=1);
+//  Set(SHARED(bridged,${EXTEN};1)=1); // Dumb semicolon-bypass hack
+//  Set(SHARED(bridged,${EXTEN};2)=1);
+//  Bridge(${EXTEN};2);
+  Set(SHARED(bridged,${E})=1);
+  Bridge(${E});
+
+  Hangup();
+ }
+}
+
+context Q_FAKE {
+ h => {
+  Hangup();
+ }
+ _. => {
+  NoOp(FAKE LEG: ${EXTEN});
+  MusicOnHold();
+ }
+}

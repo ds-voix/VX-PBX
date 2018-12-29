@@ -1,0 +1,2 @@
+Some valuable scripts for asterisk PBX
+must be placed here.

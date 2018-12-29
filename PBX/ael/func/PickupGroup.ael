@@ -1,0 +1,19 @@
+// Just try to pickup the group
+macro PickupGroup() {
+ NoOp(${leg1}>>${leg2} FUNCTION PickupGroup());
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+ Set(DATA=${DATA},FUNC=${CONTEXT});
+ Set(CDR(x-data)={${DATA:1}});
+
+ Set(CHANNEL(language)=${DEFAULT_LANG});
+
+ Set(SHARED(PICKUP)=${cid});
+
+ Dial(LOCAL/s@pickup_group,,Cg);
+// ForkCDR(r);
+ Pickup();
+ return;
+}

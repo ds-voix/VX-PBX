@@ -1,0 +1,112 @@
+// Try to send message (e.g. SIP MESSAGE method) while dial
+// insert into "Func" values ('090','28583','DialSendMessage','Test message','531:583');
+macro DialSendMessage(Message,Route,FallBack,NoTransfer) {
+ NoOp(${leg1}>>${leg2} FUNCTION DialSendMessage(${Message},${Route},${FallBack},${NoTransfer}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+
+ Set(RESULT=Invalid Route);
+ if ("${Route}"="") return;
+
+ if ("${Message}"!="") Set(__SEND_MESSAGE=${Message});
+
+ RESULT=OK;
+
+ for (LOCAL(i)=1; ${i}<=${FIELDQTY(Route,:)}; LOCAL(i)=${i}+1) {
+  Set(LOCAL(rt)=${rt}&LOCAL/${CUT(Route,:,${i})}@iax/n);
+ }
+
+ Set(__NO_TRANSFER=${NoTransfer});
+ Set(CHANNEL(language)=${DEFAULT_LANG});
+ Dial(${rt:1},,rfg); // Spawn parallel calls
+
+ if ("${DIALSTATUS}"!="ANSWER") {
+  if ("${FallBack}"!="") Dial(LOCAL/${FallBack}@iax/n,,fg);
+ }
+
+ if ("${DIALSTATUS}"="ANSWER") RESULT=OK; else Set(RESULT=${DIALSTATUS});
+ return;
+} // DialSendMessage(Message,Route,FallBack,NoTransfer)
+
+// The same as DialSendMessage, except of ${Route} specifies full one
+// insert into "Func" values ('090','28583','RouteSendMessage','Test message','531@iax:583@iax');
+macro RouteSendMessage(Message,Route,FallBack,NoTransfer) {
+ NoOp(${leg1}>>${leg2} FUNCTION RouteSendMessage(${Message},${Route},${FallBack},${NoTransfer}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+
+ Set(RESULT=Invalid Route);
+ if ("${Route}"="") return;
+
+ if ("${Message}"!="") Set(__SEND_MESSAGE=${Message});
+
+ RESULT=OK;
+
+ for (LOCAL(i)=1; ${i}<=${FIELDQTY(Route,:)}; LOCAL(i)=${i}+1) {
+  Set(LOCAL(rt)=${rt}&LOCAL/${CUT(Route,:,${i})}/n);
+ }
+
+ Set(__NO_TRANSFER=${NoTransfer});
+ Set(CHANNEL(language)=${DEFAULT_LANG});
+ Dial(${rt:1},,rfg); // Spawn parallel calls
+
+ if ("${DIALSTATUS}"!="ANSWER") {
+  if ("${FallBack}"!="") Dial(LOCAL/${FallBack}@iax/n,,fg);
+ }
+
+ if ("${DIALSTATUS}"="ANSWER") RESULT=OK; else Set(RESULT=${DIALSTATUS});
+ return;
+} // RouteSendMessage(Message,Route,FallBack,NoTransfer)
+
+// insert into "Func" values ('090','ALL','SendMessage','Test message','_Dial(LOCAL/28583@iax/n|300|TtKkfg)');
+macro SendMessage(Message,Func,FallBack,NoTransfer) {
+ NoOp(${leg1}>>${leg2} FUNCTION SendMessage(${Message},${Func},${FallBack},${NoTransfer}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+
+ Set(RESULT=Invalid Func);
+ if ("${Func}"="") return;
+ Set(__NO_TRANSFER=${NoTransfer});
+
+ if ("${Message}"!="") Set(__SEND_MESSAGE=${Message});
+
+ RESULT=OK;
+
+ for (LOCAL(i)=1; ${i} <= ${FIELDQTY(Func,:)}; LOCAL(i)=${i}+1) {
+  Set(LOCAL(fn)=${CUT(Func,:,${i})});
+  Set(LOCAL(fnc)=${CUT(fn,\(,1)});
+  Set(LOCAL(arg)=${CUT(fn,\(,2)});
+  Set(LOCAL(arg)=${CUT(arg,\),1)});
+
+//  Set(LOCAL(args)=${REPLACE(arg,\|,\,)}); Don't work in 1.6.2
+  Set(LOCAL(args)=${CUT(arg,|,1)});
+  for (LOCAL(j)=2; ${j} <= ${FIELDQTY(arg,|)}; LOCAL(j)=${j}+1) {
+   Set(LOCAL(args)=${args},${CUT(arg,|,${j})});
+  }
+  &${fnc}(${args});
+  NoOp(RESULT=${RESULT});
+
+  if ("${RESULT}"="OK"|"${RESULT}"="NOANSWER") break;
+ }
+
+ if (("${RESULT}"!="OK") & ("${FallBack}"!="")) {
+  Set(LOCAL(fnc)=${CUT(FallBack,\(,1)});
+  Set(LOCAL(arg)=${CUT(FallBack,\(,2)});
+  Set(LOCAL(arg)=${CUT(arg,\),1)});
+
+//  Set(LOCAL(args)=${REPLACE(arg,\|,\,)}); Don't work in 1.6.2
+  Set(LOCAL(args)=${CUT(arg,|,1)});
+  for (LOCAL(j)=2; ${j} <= ${FIELDQTY(arg,|)}; LOCAL(j)=${j}+1) {
+   Set(LOCAL(args)=${args},${CUT(arg,|,${j})});
+  }
+  &${fnc}(${args});
+  NoOp(RESULT=${RESULT});
+ }
+ return;
+} // macro SendMessage(Message,Func,FallBack,NoTransfer)

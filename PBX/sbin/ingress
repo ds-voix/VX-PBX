@@ -1,0 +1,46 @@
+#!/bin/bash
+umask 177
+
+# ingress PHONE [up|down]
+
+EXT=$1
+if [ "${EXT}" == "" ]; then
+  echo "Usage: $0 PHONE [up|down]"
+  echo "  e.g. $0 8123388838 down"
+  exit
+fi
+
+if [ "$2" == "" ]; then
+  # Check current status
+  p=`psql -U postgres -qtc "SELECT \"Exten\",\"Description\" from \"Func\" where \"BIND\" = '_' and \"Exten\" = '$EXT';" pbx | sed -r 's/\s+/ /g'`
+  if [ "${p}" != "" ]; then
+    echo "INGRESS DOWN: ${p}"
+  else
+   p=`psql -U postgres -qtc "SELECT COALESCE(\"BIND\",'NULL')||'+'||\"Exten\"||'  '||COALESCE(\"Description\",'') from \"Func\" where \"Exten\" = '$EXT';" pbx | sed -r 's/\s+/ /g'`
+    echo "INGRESS UP: ${p}"
+  fi
+
+  if [ "${p}" == "" ]; then
+    echo "INGRESS NOT SET: No one DID for \"${EXT}\""
+  fi
+
+  exit
+fi
+
+[ "$2" == "down" ] && del='' || del='-- '
+[ "${del}" == "" ] && d='DOWN' || d='UP'
+
+p=`psql -U postgres -qtc "SELECT \"Exten\" from \"Func\" where \"Exten\" = '$EXT' and NOT(\"BIND\"='_');" pbx | egrep -o '[0-9]+'`
+if [ $? -gt 0 ]; then
+  echo "No DID found for \"$BIND\""
+  exit 1
+fi
+
+(
+ echo "${del}[Func ${p}] ; `basename $0` \"${EXT}\""
+ echo " Macro = Indication ; (fn,Timeout,NoTransfer,Limit)"
+ echo " P1 = NonExistent"
+ echo " P2 = 86400"
+) | /usr/local/sbin/upsert -b '_' -IDT  | psql -U postgres -q pbx
+
+echo "INGRESS ${d} for DID [$p]"

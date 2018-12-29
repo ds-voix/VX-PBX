@@ -1,0 +1,128 @@
+// Spawn a parallel calls to numbers in ${Route} after ${Timeout} seconds
+// Try to call ${FallBack} number when no answer was detected
+// Returns "OK" when Dial() succeeds, or explanation string in other case
+// insert into "Func" values ('090','ALL','DialPause','15','583:584:585','531','0');
+
+macro DialPause(Timeout,Route,FallBack,NoTransfer) {
+ NoOp(${leg1}>>${leg2} FUNCTION DialPause(${Timeout},${Route},${FallBack},${NoTransfer}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+
+ Set(RESULT=Invalid Timeout);
+ if ("${Timeout}"="") return;
+ if (${Timeout}<0) return;
+ Set(RESULT=Invalid Route);
+ if ("${Route}"="") return;
+ Set(__NO_TRANSFER=${NoTransfer});
+
+ RESULT=OK;
+
+ for (LOCAL(i)=1; ${i}<=${FIELDQTY(Route,:)}; LOCAL(i)=${i}+1) {
+  Set(LOCAL(rt)=${rt}&LOCAL/${CUT(Route,:,${i})}@iax/n);
+ }
+ Wait(${Timeout}); // RTFM Wait()!!!
+
+ Set(CHANNEL(language)=${DEFAULT_LANG});
+ Dial(${rt:1},,rfg); // Spawn parallel calls
+
+ if ("${DIALSTATUS}"!="ANSWER") {
+  if ("${FallBack}"!="") Dial(LOCAL/${FallBack}@iax/n,,fg);
+ }
+
+ if ("${DIALSTATUS}"="ANSWER") RESULT=OK; else Set(RESULT=${DIALSTATUS});
+ return;
+} // DialPause(Timeout,Route,FallBack,NoTransfer)
+
+
+// The same as DialPause, except of ${Route} specifies full one
+// insert into "Func" values ('090','ALL','DialPause','15','583@iax:584@iax:28583-28585@out','531@iax','0');
+macro RoutePause(Timeout,Route,FallBack,NoTransfer) {
+ NoOp(${leg1}>>${leg2} FUNCTION RoutePause(${Timeout},${Route},${FallBack},${NoTransfer}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+
+ Set(RESULT=Invalid Timeout);
+ if ("${Timeout}"="") return;
+ if (${Timeout}<0) return;
+ Set(RESULT=Invalid Route);
+ if ("${Route}"="") return;
+ Set(__NO_TRANSFER=${NoTransfer});
+
+ RESULT=OK;
+
+ for (LOCAL(i)=1; ${i}<=${FIELDQTY(Route,:)}; LOCAL(i)=${i}+1) {
+  Set(LOCAL(rt)=${rt}&LOCAL/${CUT(Route,:,${i})}/n);
+ }
+ Wait(${Timeout}); // RTFM Wait()!!!
+
+ Set(CHANNEL(language)=${DEFAULT_LANG});
+ Dial(${rt:1},,rfg); // Spawn parallel calls
+
+ if ("${DIALSTATUS}"!="ANSWER") {
+  if ("${FallBack}"!="") Dial(LOCAL/${FallBack}/n,,fg);
+ }
+
+ if ("${DIALSTATUS}"="ANSWER") RESULT=OK; else Set(RESULT=${DIALSTATUS});
+ return;
+} // RoutePause(Timeout,Route,FallBack,NoTransfer)
+
+// Calls func after ${Timeout} seconds. There may not be parallel call,
+// so next func may be called only after previous returns (with no success)
+// Returns "OK" when Func RESULT=OK, or explanation string in other case
+// Try to call ${FallBack} func in case of all ${Func} falls
+// insert into "Func" values ('090','ALL','Pause','15','_Dial(LOCAL/28583@iax/n|300|TtKkfg):_Dial(LOCAL/28584@iax/n|300|TtKkfg)','_Dial(LOCAL/28531@iax/n|300|TtKkfg)');
+
+macro Pause(Timeout,Func,FallBack,NoTransfer) {
+ NoOp(${leg1}>>${leg2} FUNCTION Pause(${Timeout},${Func},${FallBack},${NoTransfer}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+
+ Set(RESULT=Invalid Timeout);
+ if ("${Timeout}"="") return;
+ if (${Timeout}<0) return;
+ Set(RESULT=Invalid Route);
+ if ("${Route}"="") return;
+ Set(__NO_TRANSFER=${NoTransfer});
+
+ RESULT=OK;
+
+ Wait(${Timeout}); // RTFM Wait()!!!
+
+ for (LOCAL(i)=0; ${i} < ${FIELDQTY(Func,:)}; LOCAL(i)=${i}+1) {
+  Set(LOCAL(fn)=${CUT(Func,:,${i})});
+  Set(LOCAL(fnc)=${CUT(fn,\(,1)});
+  Set(LOCAL(arg)=${CUT(fn,\(,2)});
+  Set(LOCAL(arg)=${CUT(arg,\),1)});
+
+//  Set(LOCAL(args)=${REPLACE(arg,\|,\,)}); Don't work in 1.6.2
+  Set(LOCAL(args)=${CUT(arg,|,1)});
+  for (LOCAL(j)=2; ${j} <= ${FIELDQTY(arg,|)}; LOCAL(j)=${j}+1) {
+   Set(LOCAL(args)=${args},${CUT(arg,|,${j})});
+  }
+  &${fnc}(${args});
+  NoOp(RESULT=${RESULT});
+
+  if ("${RESULT}"="OK") break;
+ }
+
+ if (("${RESULT}"!="OK") & ("${FallBack}"!="")) {
+  Set(LOCAL(fnc)=${CUT(FallBack,\(,1)});
+  Set(LOCAL(arg)=${CUT(FallBack,\(,2)});
+  Set(LOCAL(arg)=${CUT(arg,\),1)});
+
+//  Set(LOCAL(args)=${REPLACE(arg,\|,\,)}); Don't work in 1.6.2
+  Set(LOCAL(args)=${CUT(arg,|,1)});
+  for (LOCAL(j)=2; ${j} <= ${FIELDQTY(arg,|)}; LOCAL(j)=${j}+1) {
+   Set(LOCAL(args)=${args},${CUT(arg,|,${j})});
+  }
+  &${fnc}(${args});
+  NoOp(RESULT=${RESULT});
+ }
+ return;
+} // Pause(Timeout,Func,FallBack,NoTransfer)

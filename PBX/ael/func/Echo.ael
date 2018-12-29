@@ -1,0 +1,21 @@
+// ECHO service
+macro Echo() {
+ NoOp(${leg1}>>${leg2} FUNCTION Echo());
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+ Set(DATA=${DATA},FUNC=${CONTEXT});
+ Set(CDR(x-data)={${DATA:1}});
+
+ Set(CHANNEL(language)=${DEFAULT_LANG});
+ Set(LOCAL(file)=/var/spool/asterisk/monitor/echo-${cid}-${EPOCH});
+
+ Answer;
+ Record(${file}.alaw,,20,ky);
+ Playback(beep&${file});
+
+ System(/bin/rm -f "${file}.alaw");
+
+ return;
+} // macro Echo()

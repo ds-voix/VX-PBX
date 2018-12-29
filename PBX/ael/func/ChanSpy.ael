@@ -1,0 +1,19 @@
+// Connect to the already bridged call.
+macro SpyExten(Exten,fn) {
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+ Set(DATA=${DATA},FUNC=${CONTEXT});
+ Set(CDR(x-data)={${DATA:1}});
+
+// ChanSpy(SIP/${BIND},Be(${Exten})Eq);
+ ChanSpy(SIP/${BIND}+${Exten},ESse(SIP/${BIND}+${Exten})); // qe(${Exten}@exten)
+
+ if ("${fn}"="") return;
+ #include "ael/func/FUNC.INC"
+ return;
+} // macro DTMF(MaxDigits,Prefix,Timeout,fn)
+
+
+//* Права можно задавать через ${SPYGROUP}

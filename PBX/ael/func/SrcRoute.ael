@@ -1,0 +1,67 @@
+// Get number to dial, accroding to src-routing table
+// insert into "Func" values ('090','ALL','DialSrcRoute','1','583:584');
+macro DialSrcRoute(RoutingList,Default,FallBack,NoTransfer) {
+ NoOp(${leg1}>>${leg2} FUNCTION DialSrcRoute(${RoutingList},${Default},${FallBack},${NoTransfer}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+ Set(RESULT=Invalid RoutingList);
+ if ("${RoutingList}"="") return;
+
+ Set(RESULT=Invalid Route);
+
+ Set(LOCAL(Route)=${ODBC_GET_ROUTE(${RoutingList},${cid})});
+ if ("${Route}"="") Set(LOCAL(Route)=${Default});
+ if ("${Route}"="") return;
+
+ RESULT=OK;
+
+ for (LOCAL(i)=1; ${i}<=${FIELDQTY(Route,:)}; LOCAL(i)=${i}+1) {
+  Set(LOCAL(rt)=${rt}&LOCAL/${CUT(Route,:,${i})}@iax/n);
+ }
+
+ Set(__NO_TRANSFER=${NoTransfer});
+ Set(CHANNEL(language)=${DEFAULT_LANG});
+ Dial(${rt:1},,rfg); // Spawn parallel calls
+
+ if ("${DIALSTATUS}"!="ANSWER") {
+  if ("${FallBack}"!="") Dial(LOCAL/${FallBack}@iax/n,,fg);
+ }
+
+ if ("${DIALSTATUS}"="ANSWER") RESULT=OK; else Set(RESULT=${DIALSTATUS});
+ return;
+} // macro DialSrcRoute(RoutingList,Default,FallBack,NoTransfer)
+
+// The same as DialSrcRoute, except of ${Route} specifies full one
+// insert into "Func" values ('090','ALL','RouteSrcRoute','1','583@iax:584@iax');
+macro RouteSrcRoute(RoutingList,Default,FallBack,NoTransfer) {
+ NoOp(${leg1}>>${leg2} FUNCTION RouteSrcRoute(${RoutingList},${Default},${FallBack},${NoTransfer}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+ Set(RESULT=Invalid RoutingList);
+ if ("${RoutingList}"="") return;
+
+ Set(RESULT=Invalid Route);
+
+ Set(LOCAL(Route)=${ODBC_GET_ROUTE(${RoutingList},${cid})});
+ if ("${Route}"="") Set(LOCAL(Route)=${Default});
+ if ("${Route}"="") return;
+
+ for (LOCAL(i)=1; ${i}<=${FIELDQTY(Route,:)}; LOCAL(i)=${i}+1) {
+  Set(LOCAL(rt)=${rt}&LOCAL/${CUT(Route,:,${i})}/n);
+ }
+
+ Set(__NO_TRANSFER=${NoTransfer});
+ Set(CHANNEL(language)=${DEFAULT_LANG});
+ Dial(${rt:1},,rfg); // Spawn parallel calls
+
+ if ("${DIALSTATUS}"!="ANSWER") {
+  if ("${FallBack}"!="") Dial(LOCAL/${FallBack}@iax/n,,fg);
+ }
+
+ if ("${DIALSTATUS}"="ANSWER") RESULT=OK; else Set(RESULT=${DIALSTATUS});
+ return;
+} // macro RouteSrcRoute(RoutingList,Default,FallBack,NoTransfer)

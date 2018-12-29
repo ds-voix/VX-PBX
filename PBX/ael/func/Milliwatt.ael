@@ -1,0 +1,17 @@
+// Generate 1004Hz
+macro 1004Hz() {
+ NoOp(${leg1}>>${leg2} FUNCTION 1004Hz());
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+ Set(DATA=${DATA},FUNC=${CONTEXT});
+ Set(CDR(x-data)={${DATA:1}});
+
+ Set(CHANNEL(language)=${DEFAULT_LANG});
+
+ Answer;
+ Milliwatt();
+
+ return;
+} // macro 1004Hz()

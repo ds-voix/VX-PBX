@@ -1,0 +1,61 @@
+// Rate extensions in CallList by last answer and make dial through it
+macro MoreAnswer(CallList,Simultaneous,FallBack,NoTransfer) {
+ NoOp(${leg1}>>${leg2} FUNCTION MoreAnswer(${CallList},${Simultaneous},${FallBack},${NoTransfer}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+ RESULT=OK;
+
+ Set(HASH(list)=${ODBC_CALLLIST(${HASH(res,CallList)})});
+ Set(_SPAWN=${HASH(res,Exten)});
+
+ local count=0;
+ local rt=;
+ Set(_SPAWN=${cid});
+ Set(_CALL_LIST=${CallList});
+ Set(LOCAL(calls)=${ODBC_SORT_CALLS(${BIND}_${CallList},${CallList})});
+ while (1=1) {
+  Set(HASH(call)=${ODBC_FETCH(${calls})});
+  if ("${ODBC_FETCH_STATUS}"!="SUCCESS") {
+   if ("${rt:1}"!="") Dial(${rt:1},${HASH(list,Timeout)},rfg); // Spawn parallel calls
+   break;
+  }
+  Set(LOCAL(rt)=${rt}&LOCAL/${HASH(call,Exten)}:${HASH(call,NRec)}@spawn1/n);
+  if (${count}<${Simultaneous}) {
+   local count=${count}+1;
+  } else {
+   local count=0;
+   Dial(${rt:1},${HASH(list,Timeout)},rfg); // Spawn parallel calls
+   if ("${DIALSTATUS}"="ANSWER") break;
+   local rt=;
+  }
+ }
+
+ if ("${DIALSTATUS}"!="ANSWER") {
+  Set(LOCAL(fn)=${FallBack});
+  if ("${fn}"="") return;
+  #include "ael/func/FUNC.INC"
+ }
+ if ("${DIALSTATUS}"="ANSWER") RESULT=OK; else Set(RESULT=${DIALSTATUS});
+ return;
+} // macro MoreAnswer(CallList,Simultaneous,FallBack,NoTransfer)
+
+
+context spawn1 { // Spawn call with optional timeout before
+ h => {
+  Hangup();
+ }
+ _. => {
+  Dial(LOCAL/${SPAWN}-${CUT(EXTEN,:,1)}@out/n,,rfgU(SortCalls^${CALL_LIST}^${CUT(EXTEN,:,2)}));
+ }
+}
+
+macro SortCalls() {
+ catch s {
+  NoOp(XX ${ARG1} ${ARG2});
+  Set(ODBC_SORT_CALLS(${BIND}_${ARG1})=${ARG2});
+  return;
+ }
+ return;
+}

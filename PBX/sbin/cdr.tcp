@@ -1,0 +1,61 @@
+#!/usr/bin/python -u
+# -*- coding: utf-8 -*-
+
+# Read line-by line input from tcp connection
+# Then store it in proper named log
+# (c) 2014.10.24 by PnD!
+# License: GPLv3
+
+import sys
+import subprocess
+import re
+import time
+import os
+import signal
+
+#import socket
+#import threading
+import SocketServer
+
+# nc -l 5101
+
+if (len(sys.argv) < 2):
+  path = '/var/log/cdr/'
+else:
+  path = sys.argv[1].rstrip('/') + '/'
+
+class MyTCPHandler(SocketServer.StreamRequestHandler):
+
+  def handle(self):
+    # self.rfile is a file-like object created by the handler;
+    # we can now use e.g. readline() instead of raw recv() calls
+    self.data = self.rfile.readline()
+
+    if (self.data != ''):
+      fpath = path + self.client_address[0] + '/'
+      if (not os.path.exists(fpath)):
+        os.makedirs(fpath)
+      fname = fpath + time.strftime('%Y%m%d.log', time.localtime() )
+
+      f = open(fname, 'a')
+      f.write(self.data)
+      f.flush()
+      f.close()
+
+#    self.wfile.write(self.data.upper())
+
+if __name__ == "__main__":
+  HOST, PORT = "0.0.0.0", 5101
+
+  print time.strftime('%d.%m.%Y %H:%M:%S', time.localtime() ) + ': Logger started'
+
+  def signal_handler(signal, frame):
+    print time.strftime('%d.%m.%Y %H:%M:%S', time.localtime() ) + ': Logger terminated'
+    sys.exit(0)
+
+  signal.signal(signal.SIGINT, signal_handler)
+
+  server = SocketServer.TCPServer((HOST, PORT), MyTCPHandler)
+  server.serve_forever()
+
+sys.exit()

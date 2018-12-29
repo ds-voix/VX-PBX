@@ -1,0 +1,22 @@
+// Try to reach ${OPERATOR} if set, or ${FallBack} if no
+macro Operator(FallBack,NoTransfer) {
+ NoOp(${leg1}>>${leg2} FUNCTION Operator(${FallBack},${NoTransfer}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+ Set(DATA=${DATA},FUNC=${CONTEXT};OPERATOR=${OPERATOR});
+ Set(CDR(x-data)={${DATA:1}});
+
+ RESULT=OK;
+ if ("${OPERATOR}"!="") {
+  Set(__dnid=${OPERATOR});
+  &Event(transfer);
+  Dial(LOCAL/${OPERATOR}@iax/n);
+  Set(RESULT=${DIALSTATUS});
+ }
+
+ if ("${DIALSTATUS}"!="ANSWER") Dial(LOCAL/${FallBack}@iax/n);
+ if ("${DIALSTATUS}"="ANSWER") RESULT=OK; else Set(RESULT=${DIALSTATUS});
+ return;
+} // macro Operator(FallBack,NoTransfer)

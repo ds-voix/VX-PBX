@@ -1,0 +1,25 @@
+#!/bin/bash
+if [ "$1" == "" ]; then
+  egrep -n "^macro .+\(" /etc/asterisk/ael/func/*.ael | cut -d ':' -f 3 | sed 's/{//' | sort -k 2
+  echo ""
+  echo "  Use \"$0 MacroName\" for details"
+  exit
+fi
+
+
+m=`egrep -n "^macro $1\(" /etc/asterisk/ael/func/*.ael`
+file=`echo "$m" | cut -d ':' -f 1`
+if [ "$file" == "" ]; then
+  echo "Macro not found"
+  exit
+fi
+
+str=`echo "$m" | cut -d ':' -f 2`
+str=$(( $str - 2 ))
+lines=2
+if [ $str -le 0 ]; then
+  lines=1
+  str=1
+fi
+
+sed "$str,+$lines!d ; s/{//" "${file}"

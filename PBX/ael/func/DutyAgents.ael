@@ -1,0 +1,47 @@
+// Spawn calls to the duty agents gang,
+// according to it's settings
+// insert into "Func" values ('090','ALL',NULL,'DialDuty','1');
+macro DialDuty(Duty,FallBack,NoTransfer) {
+ NoOp(${leg1}>>${leg2} FUNCTION DialDuty(${Duty},${FallBack},${NoTransfer}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+ Set(DATA=${DATA},FUNC=${CONTEXT};DUTY=${Duty});
+ Set(CDR(x-data)={${DATA:1}});
+
+ Set(RESULT=Invalid Duty);
+ if ("${Duty}"="") return;
+
+ //"Exten","BIND","Amount","Announce"
+ Set(HASH(dt)=${ODBC_DUTY(${Duty})});
+ if ("${HASH(dt,Exten)}"="") return;
+
+ if ("${BIND}"="") Set(__BIND=${HASH(dt,BIND)});
+
+ Set(CDR(accountcode)=${HASH(dt,Exten)});
+ Set(CDR(x-domain)=${BIND});
+
+ //"Agent","Description","VALID","Active"
+ Set(LOCAL(agents)=${ODBC_DUTY_AGENTS(${Duty})});
+
+ for (LOCAL(i)=1; ${i}<=${HASH(dt,Amount)}; LOCAL(i)=${i}+1) {
+  Set(HASH(da)=${ODBC_FETCH(${agents})});
+  if ("${ODBC_FETCH_STATUS}"="SUCCESS") {
+   if ("${HASH(dt,VALID)}"!=0|"${n}"="") Set(LOCAL(n)=${n}&LOCAL/${HASH(dt,Exten)}-${HASH(da,Agent)}@out/n);
+  } else break;
+ }
+
+ Set(__NO_TRANSFER=${NoTransfer});
+ Set(CHANNEL(language)=${DEFAULT_LANG});
+
+ Set(RESULT=No agents);
+ if ("${n:1}"!="") Dial(${n:1},,crfg); // Spawn parallel calls
+
+ if ("${DIALSTATUS}"!="ANSWER") {
+  if ("${FallBack}"!="") Dial(LOCAL/${FallBack}@iax/n,,fg);
+ }
+
+ if ("${DIALSTATUS}"="ANSWER") RESULT=OK; else Set(RESULT=${DIALSTATUS});
+ return;
+} // DialDuty(Duty,FallBack,NoTransfer)

@@ -1,0 +1,24 @@
+#!/bin/sh
+umask 177
+
+TIMEOUT=60
+
+log="/bin/logger -s -p local7.notice -t sip-watch@AntiTheft -- "
+
+_exit () {
+  eval ${log} '\*\* BRAKE'
+  exit 0
+}
+
+trap "_exit" SIGINT SIGTERM
+
+eval ${log} '\*\* STARTED. watch sip every ${TIMEOUT}s'
+while :
+do
+  /usr/local/sbin/AntiTheft/LastSeen >> /var/log/sip-watch.log 2>&1
+
+  for (( i=0; i<${TIMEOUT}; i++ ))
+  do
+    sleep 1
+  done
+done

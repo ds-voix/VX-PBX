@@ -1,0 +1,40 @@
+// Play ${File} ${Count} times (if set)
+// insert into "Func" values ('090','ALL',NULL,'PlayFiles','announce1&announce2');
+
+macro PlayFiles(File,Count,NoAnswer,fn) {
+ NoOp(${leg1}>>${leg2} FUNCTION PlayFiles(${File},${Count},${NoAnswer},${fn}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+
+ Set(DATA=${DATA},FUNC=${CONTEXT});
+ Set(CDR(x-data)={${DATA:1}});
+
+ Set(RESULT=Invalid File);
+ if ("${File}"="") return;
+
+ Set(CHANNEL(language)=${DEFAULT_LANG});
+ RESULT=OK;
+
+ if ("${NoAnswer}"!="1") {
+  Answer;
+ } else {
+  Progress;
+ }
+
+ Wait(1);
+
+ local i=0;
+ if ("${count}"="") {
+  local count=1;
+ }
+ while (${i} < ${count}) {
+  Playback(${File},noanswer);
+  Wait(1);
+  local i=${i}+1;
+ }
+
+ #include "ael/func/FUNC.INC"
+ return;
+} // macro PlayFiles(File,Count,NoAnswer,fn)

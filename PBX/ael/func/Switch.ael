@@ -1,0 +1,86 @@
+// Just call function "fn". Variables may be set as comma-separated list
+// insert into "Func" values ('090','ALL',NULL,'Switch','Exten(555,VOIX)','DialSuffix=/123');
+macro Switch(fn,Var,Limit,FallBack) {
+ NoOp(${leg1}>>${leg2} FUNCTION Switch(${fn},${Var},${Limit},${FallBack}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+
+ Set(DATA=${DATA},FUNC=${CONTEXT};LIMIT=${Limit});
+ Set(CDR(x-data)={${DATA:1}});
+
+ if ("${Limit}"!="") {
+  Set(LOCAL(RouteGroup)=${CUT(Limit,:,2)});
+  if ("${RouteGroup}"="") Set(LOCAL(RouteGroup)=${dnid});
+
+ Set(LOCAL(Limit)=${CUT(Limit,:,1)});
+
+  Set(GROUP(R)=${RouteGroup});
+  if (${GROUP_COUNT(${RouteGroup}@R)}>${Limit}) {
+   if ("${FallBack}"="") {
+    Congestion();
+    return;
+   } else Set(LOCAL(fn)=${FallBack});
+  }
+ }
+
+ Set(RESULT=Invalid Func);
+ if ("${fn}"="") return;
+
+ RESULT=OK;
+
+ for (LOCAL(i)=1; ${i}<=${FIELDQTY(Var,\,)}; LOCAL(i)=${i}+1) {
+  Set(LOCAL(v)=${CUT(Var,\,,${i})});
+  Set(LOCAL(val)=${CUT(v,=,2)});
+  Set(${CUT(v,=,1)}=${EVAL(${val})});
+ }
+
+ #include "ael/func/FUNC.INC"
+
+ if ("${hang}"="1") Hangup();
+ return;
+} // macro Switch(fn,Var,Limit,FallBack)
+
+// Serialize up to 4 function calls
+// insert into "Func" values ('090','ALL',NULL,'Series','Exten(555,VOIX)','Exten(556,VOIX)');
+macro Series(fn1,fn2,fn3,fn4) {
+ NoOp(${leg1}>>${leg2} FUNCTION Series(${fn1},${fn2},${fn3},${fn4}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+ Set(RESULT=Invalid Func);
+ Set(fn=${fn1});
+ if ("${fn}"="") return;
+
+ RESULT=OK;
+
+ Set(DATA=${DATA},FUNC=${CONTEXT};FN=1);
+ Set(CDR(x-data)={${DATA:1}});
+
+ #include "ael/func/FUNC.INC"
+
+ Set(DATA=${DATA},FUNC=${CONTEXT};FN=2);
+ Set(CDR(x-data)={${DATA:1}});
+
+ Set(fn=${fn2});
+ if ("${fn}"=""|"${hang}"="1"|"${RESULT}"="OK") return;
+ #include "ael/func/FUNC.INC"
+
+ Set(DATA=${DATA},FUNC=${CONTEXT};FN=3);
+ Set(CDR(x-data)={${DATA:1}});
+
+ Set(fn=${fn3});
+ if ("${fn}"=""|"${hang}"="1"|"${RESULT}"="OK") return;
+ #include "ael/func/FUNC.INC"
+
+ Set(DATA=${DATA},FUNC=${CONTEXT};FN=4);
+ Set(CDR(x-data)={${DATA:1}});
+
+ Set(fn=${fn4});
+ if ("${fn}"=""|"${hang}"="1"|"${RESULT}"="OK") return;
+ #include "ael/func/FUNC.INC"
+
+ return;
+}

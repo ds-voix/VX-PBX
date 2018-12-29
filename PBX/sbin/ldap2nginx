@@ -1,0 +1,187 @@
+#!/usr/bin/python -u
+# -*- coding: utf-8 -*-
+
+# Copyright (C) 2012-2014 Dmitry Svyatogorov ds@vo-ix.ru
+
+#    This program is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU Affero General Public License as
+#    published by the Free Software Foundation, either version 3 of the
+#    License, or (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU Affero General Public License for more details.
+#
+#    You should have received a copy of the GNU Affero General Public License
+#    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+import sys
+import time
+import psycopg2
+import psycopg2.extras
+from psycopg2.extensions import adapt
+import ldap
+ldap.set_option(ldap.OPT_REFERRALS, 0)
+import subprocess
+
+import glob
+import os
+#from socket import *
+
+## first you must open a connection to the server
+host='91.142.84.124'
+user='cn=admin,dc=dengionline,dc=com'
+passwd='oldapadm19_91'
+KeyField='entryUUID' # Use UUID instead of baseDN
+
+lastmsg = ''
+
+def log(msg):
+  global lastmsg
+  if msg != lastmsg:
+    print time.asctime(), msg
+    lastmsg = msg
+
+
+#print time.asctime(), 'Started LDAP >> SQL handler'
+log("Started LDAP >> NGINX handler")
+
+while True:
+  log("Sync start")
+  cur = None
+  sql = ''
+  users=''
+
+  try:
+    l = ldap.open(host)
+    l.protocol_version = ldap.VERSION3
+    l.simple_bind_s(user,passwd)
+  except ldap.INVALID_CREDENTIALS:
+    sys.stderr.write("Authorization incorrect\n")
+    sys.exit(255)
+  except ldap.LDAPError, e:
+#    print time.asctime(), "LDAP ERROR:\n", e
+    log("LDAP ERROR:\n" + str(e))
+    time.sleep(60)
+    continue
+
+  ## The next lines will also need to be changed to support your search requirements and directory
+  baseDN = "dc=dengionline,dc=com"
+  searchScope = ldap.SCOPE_SUBTREE
+  ## retrieve all attributes - again adjust to your needs - see documentation for more options
+  # IPPhone mail IPPhoneM IPPhoneRestriction displayName mobile IPPhonePass
+  retrieveAttributes = [ 'userPassword', 'cn', 'CallView', 'CallHide', 'CallViewDirections' ]
+  searchFilter = "(&(&(objectClass=inetOrgPerson)(objectClass=OXUserObject)(objectClass=CallViewer))(|(!(isEnabled=*))(isEnabled=TRUE))(isATSable=TRUE))"
+#  searchFilter = ''
+  try:
+    res = l.search_s(baseDN, searchScope, searchFilter, retrieveAttributes)
+
+    for i in glob.glob('/var/lib/nginx/restricted/*.ht'):
+      os.unlink (i)
+    for i in glob.glob('/etc/nginx/pbx/*.conf'):
+      os.unlink (i)
+
+    for attr in res:
+      dn = attr[0]
+      user = attr[1]['cn'][0]
+      users += ", %s" % user
+      re = ''
+      nre = ''
+      if 'userPassword' in attr[1]:
+        file = '/var/lib/nginx/restricted/' + user + '.ht'
+#        print file
+        f = open(file, "w")
+        try:
+          f.write(user + ':' + attr[1]['userPassword'][0] + '\n') # Write a string to a file
+        finally:
+          f.close()
+
+        file = '/etc/nginx/pbx/' + user + '.conf'
+#        print file
+        f = open(file, "w")
+        try:
+          ht = """location ~ '^/%s/_.gif' {
+  auth_basic "restricted access area";
+  auth_basic_user_file /var/lib/nginx/restricted/%s.ht;
+  empty_gif;
+}
+""" % (user, user)
+          f.write(ht) # Write a string to a file
+
+          if ('CallHide' in attr[1].keys()):
+            nre = attr[1]['CallHide'][0]
+#          if (nre != ""):
+            ht = """location ~ '^/%s/(%s)' {
+  deny  all;
+  return 404;
+}
+""" % (user, nre)
+            f.write(ht) # Write a string to a file
+
+          re = attr[1]['CallView'][0]
+          ht = """location ~ '^/%s(%s)' {
+  auth_basic "restricted access area";
+  auth_basic_user_file /var/lib/nginx/restricted/%s.ht;
+#  autoindex  on;
+  limit_rate 100k;
+  alias "/var/spool/asterisk/monitor/$1";
+}
+""" % (user, re, user)
+          f.write(ht) # Write a string to a file
+
+        finally:
+          f.close()
+          sql += """insert into "LdapUser" values (%s, %s, %s); """ % (adapt(user), adapt(re), adapt(nre))
+
+    log("users: %s" % users[2:])
+
+  except ldap.LDAPError, e:
+#    print time.asctime(), "LDAP ERROR:\n", e
+    log("LDAP ERROR:\n" + str(e))
+    time.sleep(60)
+    continue
+
+  l.unbind_s()
+
+  # Update cdr."LdapUser"
+  try:
+    connect = psycopg2.connect("dbname='cdr' user='postgres' password=''")
+  except:
+#    print time.asctime(), "SQL ERROR: Can not connect to database"
+    log("SQL ERROR: Can not connect to database")
+    time.sleep(60)
+    continue
+#  cur = connect.cursor(cursor_factory=psycopg2.extras.DictCursor)
+  cur = connect.cursor()
+
+  cur.execute("""
+  BEGIN TRANSACTION;
+  --  ISOLATION LEVEL SERIALIZABLE
+  delete from "LdapUser";
+  %s
+  COMMIT TRANSACTION;
+  """ % sql)
+
+  # Reload nginx
+  cmd = ['/usr/sbin/nginx', '-s', 'reload']
+
+  p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+  chowned = p.stdout.readlines()
+  errors = p.stderr.readlines()
+
+  p.wait()
+  if p.returncode > 1:
+    log("Error %s while nginx reload" % p.returncode)
+    for err in errors:
+      log("nginx: %s" % err)
+      continue
+  else:
+    if errors:
+#    sys.stderr.write("\tError while nginx reload:\n")
+      for err in errors:
+        log("ERROR: %s" % err)
+
+#  sys.exit(0)
+  log("Sync done")
+  time.sleep(1800)

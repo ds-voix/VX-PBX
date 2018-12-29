@@ -1,0 +1,28 @@
+#!/bin/sh
+umask 177
+
+if [ "$1" == "" ]; then
+  echo "  Usage: $0 <BIND|linkedid> [phone_regex]"
+  exit
+fi
+
+BIND=$1
+if (echo $BIND | egrep -q '^[0-9]+\.[0-9]+$'); then
+  BIND="linkedid='${BIND}'"
+  FIELDS='*'
+  ORDER='calldate desc, uniqueid desc';
+else
+  BIND="\"x-domain\"='${BIND}'"
+  FIELDS='calldate,clid,duration,billsec,accountcode,linkedid,"x-tag","x-spec"||"x-dialed","x-result","x-data"'
+  ORDER='calldate desc';
+fi
+
+[ "$2" != "" ] && ACCOUNT=" and accountcode ~ '$2'"
+
+cat <<EOF | /usr/bin/psql -qU postgres cdr | less -S
+select ${FIELDS}
+ from cdr
+ where ${BIND}${ACCOUNT}
+   and calldate > now() - interval '1 week'
+ order by ${ORDER} LIMIT 10000;
+EOF

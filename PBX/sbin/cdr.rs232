@@ -1,0 +1,54 @@
+#!/usr/bin/python -u
+# -*- coding: utf-8 -*-
+
+# Read line-by line serial input from /dev/ttyS0
+# Then store it in proper named log
+# (c) 2010.12.20 by PnD!
+# upd. (c) 2014.09.10 by PnD!
+# License: GPLv3
+
+import sys
+import subprocess
+import re
+import time
+import serial
+
+if (len(sys.argv) < 2):
+  path = '/var/log/'
+else:
+  path = sys.argv[1].rstrip('/') + '/'
+
+fname = path + time.strftime('%Y%m%d.log', time.localtime() )
+
+f = open(fname, 'a')
+#e = open(path + 'fonex.err', 'a')
+
+com = serial.Serial('/dev/ttyS0', 9600, timeout=1)
+
+print time.strftime('%d.%m.%Y %H:%M:%S', time.localtime() ) + ': Logger started'
+active = True
+
+while True:
+  while com.isOpen():
+    line = com.readline()
+    if (re.search('^\d\d:\d\d', line) != None):
+      f.close()
+      fname = path + time.strftime('%Y%m%d.log', time.localtime() )
+      f = open(fname, 'a')
+    if (line != ''):
+      f.write(line)
+      f.flush()
+#      print line.rstrip(' \r\n')
+
+  if active:
+    print time.strftime('%d.%m.%Y %H:%M:%S', time.localtime() ) + ': Serial is DOWN'
+    active = False
+
+  time.sleep(1)
+  com.open()
+
+  if com.isOpen():
+    print time.strftime('%d.%m.%Y %H:%M:%S', time.localtime() ) + ': Serial is UP'
+    active = True
+
+sys.exit()

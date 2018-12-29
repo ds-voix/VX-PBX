@@ -1,0 +1,26 @@
+// InterCom to console
+macro intercom(spec,header) {
+ NoOp(${leg1}>>${leg2} FUNCTION intercom(${spec},${header}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+
+ if ("${spec}"="") {
+  Set(spec=Console/s@console); // SIP/intercom1
+ }
+ if ("${header}"!="") {
+  SIPaddheader(${header}); // SIPaddheader(Alert-Info: Ring Answer);
+ }
+ Playback(beep);
+// SIPaddheader(Alert-Info: Ring Answer);
+ Set(CHANNEL(language)=${DEFAULT_LANG});
+ Dial(${spec},10,S(30));
+ return;
+}
+
+context console { // Audio console like InterCom
+ s => {
+  Answer;
+ }
+}

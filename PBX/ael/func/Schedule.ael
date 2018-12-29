@@ -1,0 +1,95 @@
+// Dial to "r1"|"r2", according to the schedule Spec
+// Use trigger with z-level to bypass shedule
+// insert into "Func" values ('090','ALL',NULL,'DialSchedule','3300058|0','531','585');
+
+macro DialSchedule(Spec,r1,r2,ZT) {
+ NoOp(${leg1}>>${leg2} FUNCTION DialSchedule(${Spec},${r1},${r2},${ZT}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+ if ("${r2}"="") Set(r2=${r1});
+
+ Set(LOCAL(T)=${ODBC_VAR(${ZT})});
+ local num=${r2};
+
+ if ("${T}"="") {
+  Set(LOCAL(qty)=${FIELDQTY(Spec,\|)});
+  for (LOCAL(i)=1; ${i}<=${qty}; LOCAL(i)=${i}+1) {
+   Set(LOCAL(spc)=${CUT(Spec,\|,${i})});
+
+   if ("${spc:0:1}"="!") {  // Cut BIND from extension spec
+    Set(LOCAL(spc)=${spc:1});
+    Set(LOCAL(not)=1);
+   } else {
+    Set(LOCAL(not)=0);
+   }
+
+   Set(LOCAL(res)=${ODBC_SCHEDULE(${spc})});
+   if ("${res}${not}"="10"|"${res}${not}"="01") {
+    Set(LOCAL(num)=${r1});
+    break;
+   }
+  }
+ } else {
+  if ("${T}"="1") {
+   Set(LOCAL(num)=${r1});
+  }
+ }
+ Set(CHANNEL(language)=${DEFAULT_LANG});
+ Dial(LOCAL/${num}@iax/n,,fg);
+
+ return;
+} // macro DialSchedule(Spec,r1,r2,ZT)
+
+// Call ${leg1}>>${leg2} FUNCTION "f1"|"f2", according to the schedule Spec
+// Use trigger with z-level to bypass shedule
+// insert into "Func" values ('090','ALL',NULL,'Schedule','3300058|0','_Dial(LOCAL/28584@iax/n|10|TtKkfgm)','_Dial(LOCAL/28585@iax/n|10|TtKkfgm)','ztWorkDays');
+macro Schedule(Spec,f1,f2,ZT) {
+ NoOp(${leg1}>>${leg2} FUNCTION Schedule(${Spec},${f1},${f2},${ZT}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+
+ Set(RESULT=Invalid Spec);
+ if ("${Spec}"="") return;
+ Set(RESULT=Invalid Func);
+ if ("${f1}"="") return;
+ if ("${f2}"="") Set(f2=${f1});
+
+ RESULT=OK;
+
+ Set(LOCAL(T)=${ODBC_VAR(${ZT})});
+ Set(LOCAL(fn)=${f2});
+
+ if ("${T}"="") {
+  Set(LOCAL(qty)=${FIELDQTY(Spec,\|)});
+  for (LOCAL(i)=1; ${i}<=${qty}; LOCAL(i)=${i}+1) {
+   Set(LOCAL(spc)=${CUT(Spec,\|,${i})});
+
+   if ("${spc:0:1}"="!") {  // Cut BIND from extension spec
+    Set(LOCAL(spc)=${spc:1});
+    Set(LOCAL(not)=1);
+   } else {
+    Set(LOCAL(not)=0);
+   }
+
+   Set(LOCAL(res)=${ODBC_SCHEDULE(${spc})});
+   if ("${res}${not}"="10"|"${res}${not}"="01") {
+    Set(LOCAL(fn)=${f1});
+    break;
+   }
+  }
+ } else {
+  if ("${T}"="1") {
+   Set(LOCAL(fn)=${f1});
+  }
+ }
+
+ Set(DATA=${DATA},FUNC=${CONTEXT};ZT=${T};IFTIME=${res});
+ Set(CDR(x-data)={${DATA:1}});
+
+ #include "ael/func/FUNC.INC"
+ return;
+} // macro Schedule(Spec,f1,f2,ZT)

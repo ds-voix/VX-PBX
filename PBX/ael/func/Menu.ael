@@ -1,0 +1,116 @@
+// Dynamic menu for Asterisk
+macro Menu(NRec,NoHang,Limit,OnHang) {
+ NoOp(${leg1}>>${leg2} FUNCTION Menu(${NRec},${NoHang},${Limit},${OnHang}));
+// Do menu processing based on "Menu" table
+ catch h { // whitout a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  Set(LOCAL(fn)=${OnHang});
+  if ("${fn}"="") return;
+  #include "ael/func/FUNC.INC"
+  return;
+ }
+ ClearHash(menu);
+ Set(HASH(menu)=${ODBC_MENU(${NRec})});
+
+ Set(LOCAL(hello)=${STRREPLACE(HASH(menu,Hello),&,&menu/)});
+ Set(LOCAL(prompt)=${STRREPLACE(HASH(menu,Prompt),&,&menu/)});
+
+ if ("${HASH(menu,NRec)}"="") { // No such menu!
+  return;
+ }
+
+ if ("${Limit}"!="") {
+  Set(LOCAL(RouteGroup)=${CUT(Limit,:,2)});
+  if ("${RouteGroup}"="") Set(LOCAL(RouteGroup)=${dnid});
+
+  Set(LOCAL(Limit)=${CUT(Limit,:,1)});
+
+  Set(GROUP(R)=${RouteGroup});
+  if (${GROUP_COUNT(${RouteGroup}@R)}>${Limit}) {
+   if ("${FallBack}"="") {
+    Congestion();
+    return;
+   } // else Set(LOCAL(fn)=${FallBack});
+  }
+ }
+
+ Set(CHANNEL(language)=${DEFAULT_LANG});
+ Answer(1000);
+ local num=;
+ local loop=0;
+ while (("${num}"="")&(${loop}<=${HASH(menu,Repeat)})&("${hang}"!="1")) {
+  if ((${loop}=0)&("${hello}"!="")) {
+   Read(num,menu/${hello},1,,,1);
+   if ("${num}"=""&"${READSTATUS}"!="TIMEOUT") Set(num=#);
+   Set(LOCAL(READSTATUS)=);
+  } else {
+   Read(num,menu/${prompt},1,,,${HASH(menu,Timeout)});
+   if ("${num}"=""&"${READSTATUS}"!="TIMEOUT") Set(num=#);
+  }
+  local loop=${loop}+1;
+
+  if ("${num}"!="") { // Some key pressed [0-9*#]
+   Set(LOCAL(fn)=${HASH(menu,${num})});
+
+   Set(DATA=${DATA},FUNC=${CONTEXT};MENU=${NRec};KEY=${num});
+   Set(CDR(x-data)={${DATA:1}});
+  } else {
+   Set(LOCAL(fn)=);
+  }
+  local num=;
+
+  if ((${loop}>${HASH(menu,Repeat)}&"${fn}"="")|"${READSTATUS}"="TIMEOUT") {
+   if ("${HASH(menu,TimeoutAction)}"!="") { // Do something for stupid user (on no key pressed)
+    Set(LOCAL(fn)=${HASH(menu,TimeoutAction)});
+    if ("${CUT(fn,:,1)}"!="BACK") { // Call this function
+
+     Set(DATA=${DATA},FUNC=${CONTEXT};MENU=${NRec};KEY=t);
+     Set(CDR(x-data)={${DATA:1}});
+
+     #include "ael/func/FUNC.INC"
+     if ("${NoHang}"!="1"&"${hang}"!="0") hang=1; else hang=;
+
+     Set(HASH(menu)=${ODBC_MENU(${NRec})}); // Because it is rewritten on recursion!!!
+
+     if ("${BACK}"!="") {
+      Set(LOCAL(fn)=${BACK});
+      goto back;
+     }
+    } else { // Try return to previous menu
+     if ("${HASH(menu,Parent)}"!="") {
+      Set(BACK=${CUT(fn,:,2-)});
+      hang=0;
+      NoOp(Parent=${HASH(menu,Parent)});
+      return;
+     }
+    }
+   } // if ("${HASH(menu,TimeoutAction)}"!="")
+   return;
+  }
+
+back:
+  if ("${fn}"!="") {
+   if ("${CUT(fn,:,1)}"!="BACK") { // Call this function
+    #include "ael/func/FUNC.INC"
+    if ("${NoHang}"!="1"&"${hang}"!="0") hang=1; else hang=;
+
+    Set(HASH(menu)=${ODBC_MENU(${NRec})}); // Because it is rewritten on recursion!!!
+
+    if ("${BACK}"!="") {
+     Set(LOCAL(fn)=${BACK});
+     goto back;
+    }
+   } else { // Try return to previous menu
+    if ("${HASH(menu,Parent)}"!="") {
+     Set(BACK=${CUT(fn,:,2-)});
+     hang=0;
+     NoOp(Parent=${HASH(menu,Parent)});
+     return;
+    }
+   }
+  } // if (${func})
+ } // while
+
+// NoOp(END MENU);
+ return;
+} // macro Menu(NRec,NoHang,Limit)

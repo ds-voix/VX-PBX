@@ -1,0 +1,161 @@
+// Takes a route by the random + round-robin algorithm
+// Records last choise on ${RR} global
+// Returns "OK" when Dial() succeeds, or explanation string in other case
+// insert into "Func" values ('090','ALL','DialRandom','RR-mark:10','583:584:585','531','1');
+
+macro DialRandom(RR,Route,FallBack,NoTransfer) {
+ NoOp(${leg1}>>${leg2} FUNCTION DialRandom(${RR},${Route},${FallBack},${NoTransfer}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+
+ Set(RESULT=Invalid RR);
+ if ("${RR}"="") return;
+ Set(RESULT=Invalid Route);
+ if ("${Route}"="") return;
+ Set(__NO_TRANSFER=${NoTransfer});
+ Set(__IN_QUEUE=1);
+ Set(CHANNEL(language)=${DEFAULT_LANG});
+
+ RESULT=OK;
+
+ Set(LOCAL(timeout)=${CUT(RR,:,2)});
+ if ("${timeout}"="") Set(LOCAL(timeout)=${ODBC_CONST(timeout-dial)});
+ if ("${timeout}"="") Set(LOCAL(timeout)=300);
+ Set(LOCAL(RR)=${CUT(RR,:,1)});
+
+ local pos=${RAND(1,${FIELDQTY(Route,:)})};
+
+ if("${GLOBAL(${RR})}"="${pos}") local pos=${pos}+1;
+
+ Ringing();
+ for (LOCAL(i)=0; ${i}<${FIELDQTY(Route,:)}; LOCAL(i)=${i}+1) {
+  if (${pos}>${FIELDQTY(Route,:)}) local pos=1;
+  Set(GLOBAL(${RR})=${pos});
+
+  Set(LOCAL(rt)=${CUT(Route,:,${pos})});
+  Dial(LOCAL/${rt}@iax/n,${timeout},fg);
+  Set(RESULT=${DIALSTATUS});
+  if ("${DIALSTATUS}"="ANSWER") break; // |"${DIALSTATUS}"="NOANSWER"
+  local pos=${pos}+1;
+ }
+ Set(__IN_QUEUE=);
+
+ if ("${DIALSTATUS}"!="ANSWER") {
+  if ("${FallBack}"!="") Dial(LOCAL/${FallBack}@iax/n,${timeout},fg);
+ }
+
+ if ("${DIALSTATUS}"="ANSWER") RESULT=OK; else Set(RESULT=${DIALSTATUS});
+ return;
+} // DialRandom(RR,Route,FallBack,NoTransfer)
+
+macro DialRandomOnce(RR,Route,FallBack,NoTransfer) {
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+
+ Set(RESULT=Invalid RR);
+ if ("${RR}"="") return;
+ Set(RESULT=Invalid Route);
+ if ("${Route}"="") return;
+ Set(__NO_TRANSFER=${NoTransfer});
+ Set(__IN_QUEUE=1);
+ Set(CHANNEL(language)=${DEFAULT_LANG});
+
+ RESULT=OK;
+
+ Set(LOCAL(timeout)=${CUT(RR,:,2)});
+ if ("${timeout}"="") Set(LOCAL(timeout)=${ODBC_CONST(timeout-dial)});
+ if ("${timeout}"="") Set(LOCAL(timeout)=300);
+ Set(LOCAL(RR)=${CUT(RR,:,1)});
+
+ local pos=${RAND(1,${FIELDQTY(Route,:)})};
+
+ if("${GLOBAL(${RR})}"="${pos}") local pos=${pos}+1;
+
+ Ringing();
+ for (LOCAL(i)=0; ${i}<${FIELDQTY(Route,:)}; LOCAL(i)=${i}+1) {
+  if (${pos}>${FIELDQTY(Route,:)}) local pos=1;
+  Set(GLOBAL(${RR})=${pos});
+
+  Set(LOCAL(rt)=${CUT(Route,:,${pos})});
+  Dial(LOCAL/${rt}@iax/n,${timeout},fg);
+  Set(RESULT=${DIALSTATUS});
+  if ("${DIALSTATUS}"="ANSWER"|"${DIALSTATUS}"="NOANSWER") break;
+  local pos=${pos}+1;
+ }
+ Set(__IN_QUEUE=);
+
+ if ("${DIALSTATUS}"!="ANSWER") {
+  if ("${FallBack}"!="") Dial(LOCAL/${FallBack}@iax/n,${timeout},fg);
+ }
+
+ if ("${DIALSTATUS}"="ANSWER") RESULT=OK; else Set(RESULT=${DIALSTATUS});
+ return;
+} // DialRandomOnce(RR,Route,FallBack,NoTransfer)
+
+// Takes a func to call by the  random + round-robin algorithm
+// Records last choise on ${RR} global
+// Returns "OK" when Func RESULT=OK, or explanation string in other case
+// Try to call ${FallBack} func in case of all ${RR} falls
+// insert into "Func" values ('090','ALL','Random','RR-mark','_Dial(LOCAL/28583@iax/n|300|TtKkfg):_Dial(LOCAL/28584@iax/n|300|TtKkfg)','_Dial(LOCAL/28531@iax/n|300|TtKkfg)');
+
+macro Random(RR,Func,FallBack,NoTransfer) {
+ NoOp(${leg1}>>${leg2} FUNCTION Random(${RR},${Func},${FallBack},${NoTransfer}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+
+ Set(RESULT=Invalid RR);
+ if ("${RR}"="") return;
+ Set(RESULT=Invalid Route);
+ if ("${Func}"="") return;
+ Set(__NO_TRANSFER=${NoTransfer});
+ Set(__IN_QUEUE=1);
+
+ RESULT=OK;
+
+ local pos=${RAND(1,${FIELDQTY(Func,:)})};
+
+ if("${GLOBAL(${RR})}"="${pos}") local pos=${pos}+1;
+
+ for (LOCAL(i)=0; ${i} < ${FIELDQTY(Func,:)}; LOCAL(i)=${i}+1) {
+  if (${pos}>${FIELDQTY(Func,:)}) local pos=1;
+  Set(GLOBAL(${RR})=${pos});
+
+  Set(LOCAL(fn)=${CUT(Func,:,${pos})});
+  Set(LOCAL(fnc)=${CUT(fn,\(,1)});
+  Set(LOCAL(arg)=${CUT(fn,\(,2)});
+  Set(LOCAL(arg)=${CUT(arg,\),1)});
+
+//  Set(LOCAL(args)=${REPLACE(arg,\|,\,)}); Don't work in 1.6.2
+  Set(LOCAL(args)=${CUT(arg,|,1)});
+  for (LOCAL(j)=2; ${j} <= ${FIELDQTY(arg,|)}; LOCAL(j)=${j}+1) {
+   Set(LOCAL(args)=${args},${CUT(arg,|,${j})});
+  }
+  &${fnc}(${args});
+  NoOp(RESULT=${RESULT});
+
+  if ("${RESULT}"="OK"|"${RESULT}"="NOANSWER") break;
+  local pos=${pos}+1;
+ }
+ Set(__IN_QUEUE=);
+
+ if (("${RESULT}"!="OK") & ("${FallBack}"!="")) {
+  Set(LOCAL(fnc)=${CUT(FallBack,\(,1)});
+  Set(LOCAL(arg)=${CUT(FallBack,\(,2)});
+  Set(LOCAL(arg)=${CUT(arg,\),1)});
+
+//  Set(LOCAL(args)=${REPLACE(arg,\|,\,)}); Don't work in 1.6.2
+  Set(LOCAL(args)=${CUT(arg,|,1)});
+  for (LOCAL(j)=2; ${j} <= ${FIELDQTY(arg,|)}; LOCAL(j)=${j}+1) {
+   Set(LOCAL(args)=${args},${CUT(arg,|,${j})});
+  }
+  &${fnc}(${args});
+  NoOp(RESULT=${RESULT});
+ }
+ return;
+} // macro Random(RR,Func,FallBack,NoTransfer)

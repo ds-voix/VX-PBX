@@ -1,0 +1,53 @@
+// Mangle CID for some purposes. Then dial some number. Dangerously!
+// insert into "Func" values ('090','28583','DialNewCID','28585','28531');
+macro DialNewCID(NewCID,Number) {
+ NoOp(${leg1}>>${leg2} FUNCTION DialNewCID(${NewCID},${Number}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+ Set(RESULT=Invalid NewCID);
+ if ("${NewCID}"="") return;
+
+ Set(RESULT=Invalid Number);
+ if ("${Number}"="") return;
+
+ Set(CALLERID(num)=${NewCID});
+
+ Set(CHANNEL(language)=${DEFAULT_LANG});
+ Dial(LOCAL/${Number}@iax/n,,fg);
+
+ return;
+} // macro DialNewCID(NewCID,Number)
+
+// Mangle CID for some purposes. Then call Func. Dangerously!
+// insert into "Func" values ('090','28583','NewCID','28585','process_prefix()');
+macro NewCID(NewCID,Func) {
+ NoOp(${leg1}>>${leg2} FUNCTION NewCID(${NewCID},${Func}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+ Set(RESULT=Invalid NewCID);
+ if ("${NewCID}"="") return;
+
+ Set(RESULT=Invalid Func);
+ if ("${Func}"="") return;
+
+ Set(CALLERID(num)=${NewCID});
+ Set(CALLERID(ani)=${NewCID});
+ &call-entry(${from});
+// Set(incoming=0);
+
+ Set(LOCAL(fnc)=${CUT(Func,\(,1)});
+ Set(LOCAL(arg)=${CUT(Func,\(,2)});
+ Set(LOCAL(arg)=${CUT(arg,\),1)});
+
+//  Set(LOCAL(args)=${REPLACE(arg,\|,\,)}); Don't work in 1.6.2
+ Set(LOCAL(args)=${CUT(arg,|,1)});
+ for (LOCAL(i)=2; ${i} <= ${FIELDQTY(arg,|)}; LOCAL(i)=${i}+1) {
+  Set(LOCAL(args)=${args},${CUT(arg,|,${i})});
+ }
+ &${fnc}(${args});
+ return;
+} // macro NewCID(NewCID,Func)

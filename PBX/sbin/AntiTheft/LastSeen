@@ -1,0 +1,97 @@
+#!/bin/bash
+umask 133
+
+HOST=`/bin/hostname`
+FQDN=`/bin/hostname -f`
+SYSADMIN=ds@vo-ix.ru
+
+LOG="${1:-/var/log/asterisk/secure}"
+[ -s ${LOG} ] || exit 0
+
+STATE="/var/tmp/syslog.`echo ${LOG} | /usr/bin/md5sum | /bin/cut -d" " -f1`.offset"
+
+OFFSET=`/bin/cat ${STATE} 2>/dev/null | /usr/bin/tr -cd '[[:digit:]]'`
+OFFSET=${OFFSET:-0}
+TAIL=`/usr/bin/stat -c %s "${LOG}"`
+[ ${TAIL} -eq ${OFFSET} ] && exit 0
+echo ${TAIL} > "${STATE}"
+
+# Log was rewritten
+[ ${TAIL} -lt ${OFFSET} ] && OFFSET=0
+
+# Async workaround
+[ ${OFFSET} -ge 256 ] && OFFSET=$(( ${OFFSET} - 256 )) || OFFSET=0
+
+# Prevent slowdown on huge logs - skip more then 64MB blocks
+#if [ $(( ${TAIL} - ${OFFSET} )) -gt 65536000 ]; then
+#  OFFSET=$(( ${TAIL} - 65536000 ))
+#  echo SKIP
+#fi
+
+CHUNK="`/bin/dd if=\"${LOG}\" ibs=1 skip=${OFFSET} 2>/dev/null | /bin/grep 'SuccessfulAuth' | /bin/cut -d ',' -f 6,9 | /bin/cut -d '\"' -f 2,4 | /bin/sed -r 's/\"IPV4\/UDP\//\t/ ; s/\/.+\$//'`"
+
+if [ ! -z "${CHUNK}" ]; then
+  TUPLES=`(/bin/cat <<EOF
+BEGIN TRANSACTION;
+ CREATE TEMP TABLE "@@LastSeen" ON COMMIT DROP AS
+  SELECT DISTINCT ON ("Name") * FROM "LastSeen" ORDER BY "Name", "DT" DESC;
+EOF
+  echo "${CHUNK}" | /usr/bin/uniq | /bin/awk '{print "insert into \"LastSeen\" values (~" $1 "~,","~" $2 "~);"}' | /usr/bin/tr '~' "'"
+
+  /bin/cat <<EOF
+ UPDATE "LastSeen" SET "Code" = (select "Code" from "GeoIP" where "LastSeen"."IP" between "GeoIP"."IP1" and "GeoIP"."IP2") where "Code" is NULL and NOT("IP"<<='192.168/16' or "IP"<<='172.20/12' or "IP"<<='10/8');
+ SELECT DISTINCT ON ("LastSeen"."Name") "LastSeen"."DT", "LastSeen"."Name", "LastSeen"."IP", "LastSeen"."Code", "@@LastSeen"."IP", "@@LastSeen"."Code", sip."Insecure"
+  FROM "LastSeen"
+  JOIN "@@LastSeen" ON ("@@LastSeen"."Name" = "LastSeen"."Name" and "LastSeen"."DT" > "@@LastSeen"."DT")
+  LEFT OUTER JOIN sip ON (sip.name = "LastSeen"."Name")
+  WHERE "LastSeen"."IP" != "@@LastSeen"."IP"
+  ORDER BY "LastSeen"."Name", "LastSeen"."DT" DESC;
+
+
+COMMIT TRANSACTION;
+EOF
+) | /usr/bin/psql -U postgres -qt pbx`
+
+  OIFS=$IFS
+  IFS=$'\n'
+  T=($TUPLES)
+
+  IFS='|'
+  NOTE=''
+
+  for t in "${T[@]}"
+  do
+    f=($t)
+    dt=`echo ${f[0]} | /bin/sed -r 's/^[ ]+// ; s/\.[0-9]+\+/+/'`
+    name=`echo ${f[1]} | /bin/sed 's/ //g'`
+    ip1=`echo ${f[2]} | /bin/sed 's/ //g'`
+    code1=`echo ${f[3]} | /bin/sed 's/ //g'`
+    ip0=`echo ${f[4]} | /bin/sed 's/ //g'`
+    code0=`echo ${f[5]} | /bin/sed 's/ //g'`
+    insecure=`echo ${f[6]} | /bin/sed 's/ //g'`
+
+    if [ "${code0}" != "${code1}" ]; then
+      if [ "${code1}" != "RU" ] && [ "${code1}" != "" ] && [ "${insecure}" != "t" ]; then
+        acc=`echo ${name} | /bin/sed -r 's/\+.*$//'`
+        echo "$dt !!!ACHTUNG!!! account=${acc} name=${name} last_seen=${ip0}@${code0} code moved out of @RU!"
+        # Shutdown egress immediately!
+        /usr/local/sbin/account ${acc} down out
+        ACHTUNG=1
+        NOTE="$dt !!!ACHTUNG!!! account=${acc} name=${name} last_seen=${ip0}@${code0} moved to ${ip1}@${code1}!
+$NOTE"
+      fi
+    fi
+    echo "${dt} ${name} ${ip0} >> $ip1 @${code1}"
+  done
+
+  if [ "${ACHTUNG}" == "1" ]; then
+    ACHTUNG="/var/tmp/account.${acc}.down"
+    if [ ! -f ${ACHTUNG} ]; then
+     echo ${NOTE} > ${ACHTUNG}
+     echo "${dt} Restarting PBX because of ACHTUNG!"
+     /sbin/service asterisk restart
+    fi
+
+    echo ${NOTE} | /usr/local/sbin/mailer -f "${HOST} <ACHTUNG@${FQDN}>" -t "PBX maintainers <${SYSADMIN}>" -s "!!!ACHTUNG!!! Code moved out of @RU!"
+  fi
+fi

@@ -1,0 +1,4 @@
+#!/bin/sh
+(/usr/bin/tac /var/log/asterisk/notes && /bin/zcat /var/log/asterisk/.arc/notes.1.gz | /usr/bin/tac) | \
+ /usr/bin/head -n 10000 | /bin/grep "$1" | /bin/awk '{print $1,$2,$3,$10,$11,$12,$13,$14,$15}' | /usr/bin/head -n 24 | \
+ /bin/sed 's/Reachable. (//; s/Lagged. (//' | /bin/awk '{print $1,$2,$3,$4}' | /bin/sed 's/UNREACHABLE!/-/; s/ms//'

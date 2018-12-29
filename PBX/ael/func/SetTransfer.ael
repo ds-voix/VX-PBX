@@ -1,0 +1,23 @@
+// Set Exten.TransferCall
+macro SetTransfer(Exten,Transfer) {
+ NoOp(${leg1}>>${leg2} FUNCTION SetTransfer(${Exten},${Transfer}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+ Set(RESULT=Invalid Exten);
+ if ("${Exten}"="") Set(Exten=${XFR});
+ if ("${Exten}"="") return;
+
+ Set(CHANNEL(language)=${DEFAULT_LANG});
+
+ if ("${Transfer}"="%CID%") Set(LOCAL(Transfer)=${leg1});
+ if ("${Transfer:1}"="%CID%") Set(LOCAL(Transfer)=${Transfer:0:1}${leg1});
+
+ Set(ODBC_EXTEN(${Exten},${BIND},TransferCall)=${Transfer});
+ if ("${Transfer}"!="") {
+  &SayPhone(${Transfer});
+ } else Playback(ivr/transfer-off);
+
+ return;
+} // macro SetTransfer(Exten,Transfer)

@@ -1,0 +1,26 @@
+#!/bin/bash
+umask 177
+
+if [ "$1" == "" ]; then
+ echo SQL config must be specified!
+ exit 1
+fi
+
+echo Writing asterisk config from "${1}"
+tmp=`mktemp`
+
+/usr/bin/psql -U postgres -f "${1}" pbx 1> /dev/null 2>${tmp}
+
+if [ ! -s ${tmp} ]; then
+ echo "OK"
+ rm -f ${tmp}
+ exit 0
+else
+ echo "ERROR processing config:"
+ egrep  -i 'ERROR|ОШИБКА' ${tmp} | head -n 3
+ str=`egrep  -i 'ERROR|ОШИБКА' ${tmp} | head -n 1 | cut -d ':' -f 3`
+ str=$(( $str - 1 ))
+ sed "$str,+1!d" "${1}"
+ rm -f ${tmp}
+ exit 1
+fi

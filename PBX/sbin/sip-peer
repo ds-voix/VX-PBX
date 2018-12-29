@@ -1,0 +1,7 @@
+#!/bin/sh
+if [ "$1" == "" ]; then
+  /usr/sbin/asterisk -rx 'sip show peers' | less
+else
+  (tac /var/log/asterisk/notes | egrep 'Reachable|UNREACHABLE|Lagged' | cut -d ' ' -f 1,2,3,4,7-25 | grep "$1" | head -n 16 ;\
+  /usr/sbin/asterisk -rx "sip show peer $1") | less
+fi

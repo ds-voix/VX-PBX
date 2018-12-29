@@ -1,0 +1,38 @@
+#!/bin/bash
+umask 077
+
+dst="$1"
+src="$2"
+level="$3"
+tag="$4"
+bind="$5"
+
+if [ -z "$dst" ]; then
+  echo "Usage: $0 <dst> [src=3225247] [level=0] [tag=\$TAG|'A4'] [BIND='\$BIND'|'']"
+  exit 1
+fi
+
+if [ -z "$src" ]; then
+  src='3225247'
+  echo "* SRC=${src}" >&2
+fi
+
+if [ -z "$level" ]; then
+  level='0'
+fi
+
+if [ -z "$tag" ]; then
+  tag="${TAG:-A4}"
+  echo "* TAG=${tag}" >&2
+fi
+
+if [ -z "$bind" ]; then
+  bind="${BIND}"
+  echo "* BIND=${bind}" >&2
+fi
+
+sql=`cat <<EOF
+SELECT * from "GetCallRoutes"('${dst}','${src}','${level}','${tag}','${bind}');
+EOF`
+
+/usr/bin/psql -U postgres -c "${sql}" pbx

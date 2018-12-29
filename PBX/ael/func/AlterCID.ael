@@ -1,0 +1,142 @@
+// Mangle CID name:number:ani for some purposes. Then dial some number. Dangerously!
+// insert into "Func" values ('090','28583','DialAlterCID','mangled:28585','531:583');
+macro DialAlterCID(NewCID,Route,FallBack,NoTransfer) {
+ NoOp(${leg1}>>${leg2} FUNCTION DialAlterCID(${NewCID},${Route},${FallBack},${NoTransfer}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+ Set(RESULT=Invalid NewCID);
+ if ("${NewCID}"="") return;
+
+ Set(RESULT=Invalid Route);
+ if ("${Route}"="") return;
+
+ Set(LOCAL(name)=${CUT(NewCID,:,1)});
+ Set(LOCAL(num)=${CUT(NewCID,:,2)});
+ Set(LOCAL(ani)=${CUT(NewCID,:,3)});
+
+ if ("${name}"!="") {
+  if ("${name}"="%DID%") Set(CALLERID(name)=${leg2}); else Set(CALLERID(name)=${name});
+ }
+ if ("${number}"!="") {
+  if ("${number}"="%DID%") Set(CALLERID(num)=${leg2}); else Set(CALLERID(num)=${number});
+  Set(__ALTER_CID=1);
+ }
+ if ("${ani}"!="") {
+  if ("${ani}"="%DID%") Set(CALLERID(ani)=${leg2}); else Set(CALLERID(ani)=${ani});
+ }
+
+ RESULT=OK;
+
+ for (LOCAL(i)=1; ${i}<=${FIELDQTY(Route,:)}; LOCAL(i)=${i}+1) {
+  Set(LOCAL(rt)=${rt}&LOCAL/${CUT(Route,:,${i})}@iax/n);
+ }
+
+ Set(__NO_TRANSFER=${NoTransfer});
+ Set(CHANNEL(language)=${DEFAULT_LANG});
+ Dial(${rt:1},,rfg); // Spawn parallel calls
+
+ if ("${DIALSTATUS}"!="ANSWER") {
+  if ("${FallBack}"!="") Dial(LOCAL/${FallBack}@iax/n,,fg);
+ }
+
+ if ("${DIALSTATUS}"="ANSWER") RESULT=OK; else Set(RESULT=${DIALSTATUS});
+ return;
+} // DialAlterCID(NewCID,Route,FallBack,NoTransfer)
+
+// The same as DialAlterCID, except of ${Route} specifies full one
+// insert into "Func" values ('090','28583','RouteAlterCID','mangled:28585','531@iax:583@iax');
+macro RouteAlterCID(NewCID,Route,FallBack,NoTransfer) {
+ NoOp(${leg1}>>${leg2} FUNCTION RouteAlterCID(${NewCID},${Route},${FallBack},${NoTransfer}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+
+ Set(RESULT=Invalid NewCID);
+ if ("${NewCID}"="") return;
+
+ Set(RESULT=Invalid Route);
+ if ("${Route}"="") return;
+
+ Set(LOCAL(name)=${CUT(NewCID,:,1)});
+ Set(LOCAL(number)=${CUT(NewCID,:,2)});
+ Set(LOCAL(ani)=${CUT(NewCID,:,3)});
+
+ if ("${name}"!="") {
+  if ("${name}"="%DID%") Set(CALLERID(name)=${leg2}); else Set(CALLERID(name)=${name});
+ }
+ if ("${number}"!="") {
+  if ("${number}"="%DID%") Set(CALLERID(num)=${leg2}); else Set(CALLERID(num)=${number});
+  Set(__ALTER_CID=1);
+ }
+ if ("${ani}"!="") {
+  if ("${ani}"="%DID%") Set(CALLERID(ani)=${leg2}); else Set(CALLERID(ani)=${ani});
+ }
+
+ RESULT=OK;
+
+ for (LOCAL(i)=1; ${i}<=${FIELDQTY(Route,:)}; LOCAL(i)=${i}+1) {
+  Set(LOCAL(rt)=${rt}&LOCAL/${CUT(Route,:,${i})}/n);
+ }
+
+ Set(__NO_TRANSFER=${NoTransfer});
+ Set(CHANNEL(language)=${DEFAULT_LANG});
+ Dial(${rt:1},,rfg); // Spawn parallel calls
+
+ if ("${DIALSTATUS}"!="ANSWER") {
+  if ("${FallBack}"!="") Dial(LOCAL/${FallBack}@iax/n,,fg);
+ }
+
+ if ("${DIALSTATUS}"="ANSWER") RESULT=OK; else Set(RESULT=${DIALSTATUS});
+ return;
+} // RouteAlterCID(NewCID,Route,FallBack,NoTransfer)
+
+// insert into "Func" values ('090','ALL','AlterCID','mangled:28585','_Dial(LOCAL/28583@iax/n|300|TtKkfg)');
+macro AlterCID(NewCID,Func,FallBack,NoTransfer) {
+ NoOp(${leg1}>>${leg2} FUNCTION AlterCID(${NewCID},${Func},${FallBack},${NoTransfer}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+ Set(DATA=${DATA},FUNC=${CONTEXT});
+ Set(CDR(x-data)={${DATA:1}});
+
+ Set(RESULT=Invalid NewCID);
+ if ("${NewCID}"="") return;
+
+ Set(RESULT=Invalid Func);
+ if ("${Func}"="") return;
+ Set(__NO_TRANSFER=${NoTransfer});
+
+ Set(LOCAL(name)=${CUT(NewCID,:,1)});
+ Set(LOCAL(number)=${CUT(NewCID,:,2)});
+ Set(LOCAL(ani)=${CUT(NewCID,:,3)});
+
+ if ("${name}"!="") {
+  if ("${name}"="%DID%") Set(CALLERID(name)=${leg2}); else Set(CALLERID(name)=${name});
+ }
+ if ("${number}"!="") {
+  if ("${number}"="%DID%") Set(CALLERID(num)=${leg2}); else Set(CALLERID(num)=${number});
+  Set(__ALTER_CID=1);
+ }
+ if ("${ani}"!="") {
+  if ("${ani}"="%DID%") Set(CALLERID(ani)=${leg2}); else Set(CALLERID(ani)=${ani});
+ }
+
+ RESULT=OK;
+
+ for (LOCAL(i)=1; ${i} <= ${FIELDQTY(Func,:)}; LOCAL(i)=${i}+1) {
+  Set(LOCAL(fn)=${CUT(Func,:,${i})});
+  #include "ael/func/FUNC.INC"
+
+  if ("${RESULT}"="OK"|"${RESULT}"="NOANSWER") break;
+ }
+
+ if (("${RESULT}"!="OK") & ("${FallBack}"!="")) {
+  Set(LOCAL(fn)=${FallBack});
+  #include "ael/func/FUNC.INC"
+ }
+ return;
+} // macro AlterCID(NewCID,Func,FallBack,NoTransfer)

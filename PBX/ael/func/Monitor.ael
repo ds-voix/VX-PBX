@@ -1,0 +1,41 @@
+// Record dialing peer to mp3, by default on standard monitoring path
+macro monitor(file) {
+ NoOp(${leg1}>>${leg2} FUNCTION monitor(${file}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  System(/usr/bin/lame -m m --cbr -b 32 "${mfile}.wav" "${mfile}.mp3" && /bin/rm -f "${mfile}.wav");
+  hang=1;
+  return;
+ }
+ Set(DATA=${DATA},FUNC=${CONTEXT};FILE=${file});
+ Set(CDR(x-data)={${DATA:1}});
+
+ Set(CHANNEL(language)=${DEFAULT_LANG});
+ if ("${file}"="") Set(LOCAL(file)=/var/spool/asterisk/monitor);
+
+ Set(LOCAL(mfile)=${file}/${cid}/${STRFTIME(${EPOCH},,%Y%m%d-%H%M%S)}-monitor);
+
+ Answer;
+ Record(${mfile}.wav,,0,skip);
+ System(/usr/bin/lame -m m --cbr -b 32 "${mfile}.wav" "${mfile}.mp3" && /bin/rm -f "${mfile}.wav");
+
+ return;
+} // macro monitor(file)
+
+macro beep() {  // Record ringing "beep"
+ Answer;
+ Monitor(alaw,/tmp/ast/beep);
+ Wait(1);
+ Ringing();
+ Wait(60);
+ StopMonitor;
+ return;
+}
+
+macro RecordLine(Line) {  // Record remote auto-informer message
+ if ("${Line}"="%DID%") Set(LOCAL(Line)=${leg2});
+ Answer;
+ Monitor(alaw,/tmp/ast/${Line},b);
+ &RouteCall(${Line}, 3);
+ StopMonitor;
+ return;
+}

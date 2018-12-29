@@ -1,0 +1,12 @@
+// Pass a call to the ${r1} route, then to ${r2} after timeout ${t}
+macro timeout_route(t,r1,r2) {
+ NoOp(${leg1}>>${leg2} FUNCTION timeout_route(${t},${r1},${r2}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+ Set(CHANNEL(language)=${DEFAULT_LANG});
+ Dial(LOCAL/${r1}@iax/n,${t},TtKkfg);
+ Dial(LOCAL/${r2}@iax/n,,TtKkfg);
+ return;
+} // macro timeout_route(t,r1,r2)

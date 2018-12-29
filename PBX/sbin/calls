@@ -1,0 +1,27 @@
+#!/bin/sh
+filter="$1"
+calls=`asterisk -rx 'core show channels verbose'`
+
+echo "======================== EGRESS: ==========================================="
+echo 'Extension        State   Data                            CallerID   Duration'
+echo "${calls}" | egrep 'RouteCall' | grep -v AppDial | grep "${filter}" | awk '{printf("%-16s %-7s %-26s %13s %10s\n", $3,$5,$7,$8,$9)}'
+echo " TOTAL =" `echo "${calls}" | egrep 'RouteCall' | grep -v AppDial | grep "${filter}" | wc -l`
+
+echo ""
+echo "======================== INGRESS: ======================================"
+echo 'Application  State   Data                            CallerID   Duration'
+echo "${calls}" | egrep '^SIP/A0' | grep -v Outgoing | grep "${filter}" | awk '{printf("%-12s %-7s %-26s %13s %10s\n", $6,$5,$7,$8,$9)}'
+echo " TOTAL =" `echo "${calls}" | egrep '^SIP/A0' | grep -v Outgoing | grep "${filter}" | wc -l`
+#5 State
+#6 Application
+#7 Data
+
+echo ""
+echo "======================== EXTEN: ================="
+echo 'SIP-peer         Extension       State   Duration'
+echo "${calls}" | egrep '^SIP/' | egrep 'sip|exten' | sed -r 's/^SIP\///' | sed -r 's/-.+exten// ; s/-.+sip//' | grep "${filter}" | awk '{printf("%-16s %-15s %-6s %9s\n", $1,$2,$4,$9)}'
+echo " TOTAL =" `echo "${calls}" | egrep '^SIP/' | egrep 'sip|exten' | grep "${filter}" | wc -l`
+#1 SIP-peer
+#2 Extension
+#4 State
+#8 Duration

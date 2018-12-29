@@ -1,0 +1,4 @@
+#!/bin/bash
+umask 177
+
+/usr/sbin/asterisk -rvvv 2>&1 | unbuffer -p grep FUNCTION | unbuffer -p egrep -o '"[^"]+"\)'|  unbuffer -p sed 's/^"// ; s/")$//' |  unbuffer -p egrep -v '^$' | unbuffer -p egrep --color=auto "$1" | sed 's/ FUNCTION / -> /'

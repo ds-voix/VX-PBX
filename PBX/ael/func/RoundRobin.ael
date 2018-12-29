@@ -1,0 +1,122 @@
+// Takes a route by the round-robin algorithm
+// Records last choise on ${RR} global
+// Returns "OK" when Dial() succeeds, or explanation string in other case
+// insert into "Func" values ('090','ALL','DialRoundRobin','RR-mark:10','583:584:585','531','1');
+
+macro DialRoundRobin(RR,Route,FallBack,NoTransfer) {
+ NoOp(${leg1}>>${leg2} FUNCTION DialRoundRobin(${RR},${Route},${FallBack},${NoTransfer}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+
+ Set(RESULT=Invalid RR);
+ if ("${RR}"="") return;
+ Set(RESULT=Invalid Route);
+ if ("${Route}"="") return;
+ Set(__NO_TRANSFER=${NoTransfer});
+ Set(__IN_QUEUE=1);
+ Set(CHANNEL(language)=${DEFAULT_LANG});
+
+ RESULT=OK;
+
+ Set(LOCAL(timeout)=${CUT(RR,:,2)});
+ if ("${timeout}"="") Set(LOCAL(timeout)=${ODBC_CONST(timeout-dial)});
+ if ("${timeout}"="") Set(LOCAL(timeout)=300);
+ Set(LOCAL(RR)=${CUT(RR,:,1)});
+
+ if("${GLOBAL(${RR})}"!="") Set(LOCAL(pos)=${GLOBAL(${RR})}); else local pos=0;
+
+ Set(DSTATUS=);
+
+ Ringing();
+ for (LOCAL(i)=0; ${i}<${FIELDQTY(Route,:)}; LOCAL(i)=${i}+1) {
+  local pos=${pos}+1;
+  if (${pos}>${FIELDQTY(Route,:)}) local pos=1;
+  Set(GLOBAL(${RR})=${pos});
+
+  Set(LOCAL(rt)=${CUT(Route,:,${pos})});
+  Dial(LOCAL/${rt}@iax/n,${timeout},fg);
+
+  Set(DSTATUS=${DSTATUS}-${DIALSTATUS});
+//  NoOp(HANGUPCAUSE=${HANGUPCAUSE} ${DS});
+
+  if ("${DIALSTATUS}"="ANSWER") break;
+ }
+ Set(__IN_QUEUE=);
+
+ if (${REGEX("BUSY" ${DSTATUS})}=1) {
+  Set(DIALSTATUS=BUSY);
+ } else {
+  if (${REGEX("NOANSWER" ${DSTATUS})}=1) {
+   Set(DIALSTATUS=NOANSWER);
+  }
+ }
+
+ if ("${DIALSTATUS}"!="ANSWER"&"${DIALSTATUS}"!="BUSY") {
+  if ("${FallBack}"!="") Dial(LOCAL/${FallBack}@iax/n,${timeout},fg);
+  Set(DSTATUS=${DSTATUS}-${DIALSTATUS});
+ }
+
+ if (${REGEX("BUSY" ${DSTATUS})}=1) {
+  Set(DIALSTATUS=BUSY);
+ } else {
+  if (${REGEX("NOANSWER" ${DSTATUS})}=1) {
+   Set(DIALSTATUS=NOANSWER);
+  }
+ }
+
+ if ("${DIALSTATUS}"="ANSWER") RESULT=OK; else Set(RESULT=${DIALSTATUS});
+ return;
+} // DialRoundRobin(RR,Route,FallBack,NoTransfer)
+
+// Takes a func to call by the round-robin algorithm
+// Records last choise on ${RR} global
+// Returns "OK" when Func RESULT=OK, or explanation string in other case
+// Try to call ${FallBack} func in case of all ${RR} falls
+// insert into "Func" values ('090','ALL','RoundRobin','RR-mark','_Dial(LOCAL/28583@iax/n|300|TtKkfg):_Dial(LOCAL/28584@iax/n|300|TtKkfg)','_Dial(LOCAL/28531@iax/n|300|TtKkfg)');
+
+macro RoundRobin(RR,Func,FallBack,NoTransfer) {
+ NoOp(${leg1}>>${leg2} FUNCTION RoundRobin(${RR},${Func},${FallBack},${NoTransfer}));
+ catch h { // without a catch, dialplan stops execution on hangup !!!
+  hang=1;
+  return;
+ }
+
+ Set(RESULT=Invalid RR);
+ if ("${RR}"="") return;
+ Set(RESULT=Invalid Route);
+ if ("${Func}"="") return;
+ Set(__NO_TRANSFER=${NoTransfer});
+ Set(__IN_QUEUE=1);
+
+ RESULT=OK;
+
+ if("${GLOBAL(${RR})}"!="") Set(LOCAL(pos)=${GLOBAL(${RR})}); else local pos=0;
+
+ for (LOCAL(i)=0; ${i} < ${FIELDQTY(Func,:)}; LOCAL(i)=${i}+1) {
+  local pos=${pos}+1;
+  if (${pos}>${FIELDQTY(Func,:)}) local pos=1;
+  Set(GLOBAL(${RR})=${pos});
+
+  Set(LOCAL(fn)=${CUT(Func,:,${pos})});
+
+  Set(DATA=${DATA},FUNC=${CONTEXT};POS=${pos});
+  Set(CDR(x-data)={${DATA:1}});
+
+  #include "ael/func/FUNC.INC"
+
+  if ("${RESULT}"="OK") break;
+ }
+ Set(__IN_QUEUE=);
+
+ if (("${RESULT}"!="OK") & ("${FallBack}"!="")) {
+  Set(LOCAL(fn)=${FallBack});
+
+  Set(DATA=${DATA},FUNC=${CONTEXT};POS=F);
+  Set(CDR(x-data)={${DATA:1}});
+
+  #include "ael/func/FUNC.INC"
+ }
+ return;
+} // macro RoundRobin(RR,Func,FallBack,NoTransfer)
