@@ -1,0 +1,62 @@
+# The number of milliseconds of each tick
+tickTime=2000
+
+# The number of ticks that the initial
+# synchronization phase can take
+initLimit=10
+
+# The number of ticks that can pass between
+# sending a request and getting an acknowledgement
+syncLimit=5
+
+# the directory where the snapshot is stored.
+# do not use /tmp for storage, /tmp here is just
+# example sakes.
+dataDir=/var/lib/zookeeper
+
+# the port at which the clients will connect
+clientPort=2181
+
+#### SSL ### https://zookeeper.apache.org/doc/r3.5.5/zookeeperAdmin.html
+# ZooKeeper must be upgraded to 3.5.latest
+#sslQuorum=true
+#serverCnxnFactory=org.apache.zookeeper.server.NettyServerCnxnFactory
+#ssl.quorum.trustStore.location=/etc/zookeeper/ssl/kafka.server.truststore.jks
+#ssl.quorum.trustStore.password=***
+#ssl.quorum.keyStore.location=/etc/zookeeper/ssl/kafka.server.xxx.jks
+#ssl.quorum.keyStore.password=***
+
+# the maximum number of client connections.
+# increase this if you need to handle more clients
+#maxClientCnxns=60
+
+#
+# Be sure to read the maintenance section of the
+# administrator guide before turning on autopurge.
+#
+# http://zookeeper.apache.org/doc/current/zookeeperAdmin.html#sc_maintenance
+#
+
+# The number of snapshots to retain in dataDir
+#autopurge.snapRetainCount=3
+
+# Purge task interval in hours
+# Set to "0" to disable auto purge feature
+#autopurge.purgeInterval=1
+
+# http://zookeeper.apache.org/doc/current/zookeeperAdmin.html#sc_configuration
+# server.x=[hostname]:nnnnn[:nnnnn]
+server.1=ext-kafka.xxx.local:2888:3888
+server.2=ext-kafka.yyy.local:2888:3888
+server.3=ext-kafka.zzz.local:2888:3888
+
+# https://svn.apache.org/repos/asf/zookeeper/trunk/docs/zookeeperAdmin.html
+# Does nothing, in fact
+#admin.enableServer=true
+#admin.serverPort=8080
+
+# http://zookeeper.apache.org/doc/r3.4.13/zookeeperAdmin.html
+# !!!
+tcpKeepAlive=True
+
+4lw.commands.whitelist=*

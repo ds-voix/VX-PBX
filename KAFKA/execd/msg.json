@@ -1,0 +1,28 @@
+{"producer": "ext-kafka.xxx.local",
+ "uuid": "96b35ec3-388e-4d1a-be21-c28b680ab9a1",
+ "host_regex": "",
+ "error_fails": false,
+ "no_exec": false,
+ "run_as": "root:root",
+ "use_shell": true,
+ "set_env": ["var1=value for var1", "var2=\n\"y\""],
+ "set_dir": "/root",
+ "no_wait": false,
+ "timeout": 3,
+ "max_reply": 128,
+ "commands": [
+  {
+   "id": 1,
+   "no_exec": false,
+   "run_as": "root:root",
+   "use_shell": true,
+   "set_env": ["var1=value for var1", "var2=\n\"y\""],
+   "set_dir": "/root",
+   "no_wait": false,
+   "timeout": 3,
+   "max_reply": 128,
+   "command": "cat .bash_history >&2",
+   "args": ["-v"]
+  }
+ ]
+}
