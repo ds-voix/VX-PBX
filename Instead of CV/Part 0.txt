@@ -1,3 +1,4 @@
+*Instead of CV. Part 0*
 Introduction. What for this all?
 
 In this year I'd (once again) noticed that all my "curriculum vitaes" (CV's) are appreciably outdated.
@@ -16,7 +17,7 @@ Now, I'm attempting to build a set of articles/essays. About "what I did/am doin
 
 I believe, they can be interesting/useful for my colleagues in engineering.
 
-And me too. Like learning Chinese/Turkish (in my practice), doing uncommon things improves "mind deviations". Thus, taking more resources for solving regular tasks.
+And me too. Like learning Chinese/Turkish (in my practice), doing uncommon things improves "mind deviations". Thus, more resources are provided for solving regular tasks.
 
 Also, I believe that doing so takes a chance to improve interaction. While elaborating sophisticated back-ends is highly interesting, it leaves too few resources to make already done (and working) solutions popular.
 
