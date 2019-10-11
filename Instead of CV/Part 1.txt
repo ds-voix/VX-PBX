@@ -1,0 +1,67 @@
+*Instead of CV. Part 1*
+From the beginning.
+
+In fact, most of my interest lays on different edges of well-known "queuing theory".
+Those edges may be labeled as "messaging systems", "telephony", "virtualization" etc. But, in fact, these concepts are about one thing.
+Thinking in this way, I've built a number of solutions during the past 10+ years.
+
+*Exim-based mail router.*
+Near 2008 year, I had observed how one of my colleagues was fighting against spammers.
+There was sendmail-based "old school" solution with terrible filters.
+No heuristics, because it was provider-side mail router. But everyday complaints due to virus activity on client side etc.
+
+So, it was a good place to build my first proof-of-concept. I've been started to play with exim "mta constructor", because it had enough interfaces to do external lookups. Up to usage of perl co-programs.
+
+The main ideas:
+1. Do lookup for each mail address. Don't enqueue messages with 4xx responses. Because "mail list" is different task.
+* This concept leads to very short queues. At the cost of more latency on processing of the single message. And, of course, more resources for doing lookups. But up(down!) to 0 bounces on well-functioning system.
+It's quit ok for small operator's mail router, and still works in 2019.
+2. For egress routing, implementation of network/account based limits on messages per minute. All extra messages are rejected with text reply "wait 1 minute". Every attempt to send an extra message during timeout updates the threshold.
+* With this design, client-side spam robots are unable to work at all. After few messages are sent, relaying switches off. Then, client calls support, asks "WTF?", and gets help on eliminating their viruses.
+3. Adaptive gray-listing. As operator, I must relay all the mail. Howeve, some of messages may be deferred for some reasons.
+* Of course, this component must be tuned according to email relay placement and it's common tasks.
+4. Common authentication with mail storage (was dovecot-based).
+* The main idea is like contemporary "micro-services" design. No duplication with no explicit necessity, and each block must serve on one explicit area.
+
+In modern terms, I built exim-based (almost)state-less front-end. With persistent data in postgreSQL database (it was well-known for me at 2008, already being the best of open-source ACID solutions). And with a set of interfaces to external micro-services (considering so dovecot), and some external co-routines (perl was most popular in telecoms at these times).
+
+** Scaling such a construct is at most trivial, but some tasks can stuck with postgreSQL.
+
+#############################################################################
+* Flowchart-managed PBX. Initial concepts.* https://github.com/ds-voix/VX-PBX
+Asterisk 1.6 becomes available in 2009, and it was flexible enough (but completely unstable).
+My chief in telecom asked me "what can we do with asterisk"? At these times, our solutions in telephony was ugly PSTN, with expensive-in-programming switching matrices.
+
+There already was a number of (erroneous, in my opinion) solutions like freePBX. The common error is to generate static code instead of usage of managed one.
+Amongst the multitude of side effects, such a code generators provide the widest attack field. While debugging of generated porridge requires high-skilled specialist.
+So, it's in fact trivial to mask backdoor that was promoted by generator.
+
+Thus, managed code was selected. But, by which means? I'd never been regular programmer but an electronic engineer, so I felt free to choice the convenient solution.
+PostgreSQL was again used, because of it's stored procedures (mainly like pl/sql, Ada successor). This way, I'd been offloaded the complexity from asterisk entrails to stored procedures.
+
+I've been implemented synchronous odbc calls from asterisk microcode, which returns vectors "where to go and what to do", thus switching between asterisk macros.
+* On the other side, many people are using AMI and it's successors. But it's broken "by design", because it mixes up parallel calls in single state-full thread!
+
+The next question is "how to describe phone call?". Most of PBXes succeeds its management from the early of 20x century. Smaller amount of newer designed PBXes uses strange abstractions.
+I tried to redesign PBX management from my point of view. And, in general, came to success. The main ideas still works in number of telecoms and finances.
+
+The fundamental solution was to describe call through flow charts. Named function can call another (named or inline "lambda") function and so on. User can program PBX by stacking such a "bricks".
+* It's completely unlike the contemporary "common cases". In which call flow is hard-coded on a set of "points". Or switching is done by means of pseudo-extensions, like freePBX does.
+
+Other fundamental solution was in routing implementation. I got concepts from linux routing/firewall. So, there are "Route" and "Mangle" objects in PBX now.
+And I'd eliminated the most of prefix-based routing, succeeding from PSTNs. "Call distance" named "CallLevel" is described through scalar. It's calculated for each call that have to pass outside PBX.
+The calculation has from O(1) to O(logn) complexity. In Russia, number of "numbering ranges" is (in 2019'th) less then 300, so "CallLevel" calculation is cheap enough.
+
+* Flowchart-managed PBX. Adding multy-tenancy.* https://github.com/ds-voix/VX-PBX
+After first concept becames serving telecom clients, new questions (as always) was disclosed.
+¿ How to manage multiple tenants on single PBX? "Classic" ways are too ugly and completely insecure.
+¿ How to manage PBX config itself? SQL syntax is odd and hard-to-use for regular personal.
+
+The first answer was found among para-virtualization/isolation solutions. * And such a way seems to be unique, as most of my colleges uses overpriced "hard-isolated" pbx domains.
+I'd been implemented "BIND" text tag through all of PBX objects, and MAC-like rules "who-where-how".
+In other words, "para-virtualization"/"containers" instead of "full virt".
+* In post-time, there was appeared the need in context-switching operations, and those operators were added in perl-like style. Because such manipulations are designed for high-skilled personal only.
+
+To answer the second question, I've got INI/CFG style syntax (because it's human parsable). It was named "UPSERT" because of its goal. And I wrote one-pass translator to "upsert" SQL syntax.
+While this translator is a bit too error-tolerant, it's good enough for doing its task. And still works well in 2019.
+The last versions have a number of enhancements: range of objects, regex substitutions and intuitive syntax reductions. Although there's the way (superuser only) to bypass plain SQL.
