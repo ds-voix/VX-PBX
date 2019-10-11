@@ -4,7 +4,7 @@ In this year I'd (once again) noticed that all my "curriculum vitaes" (CV's) are
 
 It's, in fact, ok. Because I'm the good engineer, and most times "job finds me".
 
-But, what to do with old CV's? It's also looks like the task that must be solved.
+But, what to do with old CV's? It also looks like the task that must be solved.
 
 The problem I view in CV's for technical vacations: most of them are about skills, therefore been the a set of scalars. HR know almost nothing about such a skills, but can parse them like some signatures.
 
