@@ -1,0 +1,23 @@
+Introduction. What for this all?
+
+In this year I'd (once again) noticed that all my "curriculum vitaes" (CV's) are appreciably outdated.
+
+It's, in fact, ok. Because I'm the good engineer, and most times "job finds me".
+
+But, what to do with old CV's? It's also looks like the task that must be solved.
+
+The problem I view in CV's for technical vacations: most of them are about skills, therefore been the a set of scalars. HR know almost nothing about such a skills, but can parse them like some signatures.
+
+This way of recruiting is highly ineffective, and leads to a lot of unnecessary interviews. Because scalar skills are not about "how he/she thinks/solves tasks". Just "this person know something about this word".
+
+Ok, I understand the problem. What to do with it?
+
+Now, I'm attempting to build a set of articles/essays. About "what I did/do". How I do. For what I do.
+
+I believe, they can be interesting/useful for my colleges in engineering.
+
+And me too. Like learning Chinese/Turkish (in my practice), doing uncommon things improves "mind deviations". Thus, taking more resources for solving regular tasks.
+
+Also, I believe that doing so takes a chance to improve interaction. While elaborating sophisticated back-ends is highly interesting, it leaves too few resources to make already done (and working) solutions popular.
+
+Let's go!
