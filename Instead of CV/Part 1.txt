@@ -27,14 +27,13 @@ In modern terms, I built exim-based (almost)state-less front-end. With persisten
 
 ** Scaling such a construct is at most trivial, but some tasks can stuck with postgreSQL.
 
-#############################################################################
 * Flowchart-managed PBX. Initial concepts.* https://github.com/ds-voix/VX-PBX
-Asterisk 1.6 becomes available in 2009, and it was flexible enough (but completely unstable).
+Asterisk 1.6 became available in 2009, and it was flexible enough (but completely unstable).
 My chief in telecom asked me "what can we do with asterisk"? At these times, our solutions in telephony was ugly PSTN, with expensive-in-programming switching matrices.
 
 There already was a number of (erroneous, in my opinion) solutions like freePBX. The common error is to generate static code instead of usage of managed one.
-Amongst the multitude of side effects, such a code generators provide the widest attack field. While debugging of generated porridge requires high-skilled specialist.
-So, it's in fact trivial to mask backdoor that was promoted by generator.
+Among the multitude of side effects, such a code generators provide the widest attack field. While debugging of generated porridge requires high-skilled specialist.
+So, it's in fact trivial to mask backdoor that was issued by generator.
 
 Thus, managed code was selected. But, by which means? I'd never been regular programmer but an electronic engineer, so I felt free to choice the convenient solution.
 PostgreSQL was again used, because of it's stored procedures (mainly like pl/sql, Ada successor). This way, I'd been offloaded the complexity from asterisk entrails to stored procedures.
@@ -42,26 +41,26 @@ PostgreSQL was again used, because of it's stored procedures (mainly like pl/sql
 I've been implemented synchronous odbc calls from asterisk microcode, which returns vectors "where to go and what to do", thus switching between asterisk macros.
 * On the other side, many people are using AMI and it's successors. But it's broken "by design", because it mixes up parallel calls in single state-full thread!
 
-The next question is "how to describe phone call?". Most of PBXes succeeds its management from the early of 20x century. Smaller amount of newer designed PBXes uses strange abstractions.
+The next question is "how to describe phone call?". Most of PBXes inherit its management from the early of 20x century. Smaller amount of newer designed PBXes uses strange abstractions.
 I tried to redesign PBX management from my point of view. And, in general, came to success. The main ideas still works in number of telecoms and finances.
 
 The fundamental solution was to describe call through flow charts. Named function can call another (named or inline "lambda") function and so on. User can program PBX by stacking such a "bricks".
 * It's completely unlike the contemporary "common cases". In which call flow is hard-coded on a set of "points". Or switching is done by means of pseudo-extensions, like freePBX does.
 
-Other fundamental solution was in routing implementation. I got concepts from linux routing/firewall. So, there are "Route" and "Mangle" objects in PBX now.
-And I'd eliminated the most of prefix-based routing, succeeding from PSTNs. "Call distance" named "CallLevel" is described through scalar. It's calculated for each call that have to pass outside PBX.
-The calculation has from O(1) to O(logn) complexity. In Russia, number of "numbering ranges" is (in 2019'th) less then 300, so "CallLevel" calculation is cheap enough.
+Other fundamental solution was in routing implementation. I took concepts from linux routing/firewall. So, there are "Route" and "Mangle" objects in PBX now.
+And I'd eliminated the most of prefix-based routing, flowing from PSTNs. "Call distance" named "CallLevel" is described through scalar. It's calculated for each call that have to originate from PBX.
+The calculation has from O(1) to O(logn) complexity.
 
 * Flowchart-managed PBX. Adding multy-tenancy.* https://github.com/ds-voix/VX-PBX
-After first concept becames serving telecom clients, new questions (as always) was disclosed.
+After first concept becames serving telecom clients, new questions (as always) was appeared.
 ¿ How to manage multiple tenants on single PBX? "Classic" ways are too ugly and completely insecure.
-¿ How to manage PBX config itself? SQL syntax is odd and hard-to-use for regular personal.
+¿ How to manage PBX config itself? SQL syntax is odd and hard-to-use for regular personnel.
 
-The first answer was found among para-virtualization/isolation solutions. * And such a way seems to be unique, as most of my colleges uses overpriced "hard-isolated" pbx domains.
-I'd been implemented "BIND" text tag through all of PBX objects, and MAC-like rules "who-where-how".
+The first answer was found among para-virtualization/containerization solutions. * And such a way seems to be unique, as most of my colleagues uses overpriced "hard-isolated" pbx domains.
+I'd been implemented "BIND" text tag in all of PBX objects, and MAC-like rules "who-where-how".
 In other words, "para-virtualization"/"containers" instead of "full virt".
-* In post-time, there was appeared the need in context-switching operations, and those operators were added in perl-like style. Because such manipulations are designed for high-skilled personal only.
+* In post-time, there was appeared the need in "context-switching" operations, and those operators were added in perl-like style. Because such manipulations are designed for high-skilled personnel only.
 
-To answer the second question, I've got INI/CFG style syntax (because it's human parsable). It was named "UPSERT" because of its goal. And I wrote one-pass translator to "upsert" SQL syntax.
-While this translator is a bit too error-tolerant, it's good enough for doing its task. And still works well in 2019.
-The last versions have a number of enhancements: range of objects, regex substitutions and intuitive syntax reductions. Although there's the way (superuser only) to bypass plain SQL.
+To answer the second question, I took INI/CFG style syntax (because it's human-parsable). It was named "UPSERT" because of its appointment. And I wrote one-pass translator for "upsert" SQL syntax.
+While this translator is a bit too error tolerant, it's good enough for doing its task. And still works well in 2019.
+The last versions have a number of enhancements: range of objects, regex substitutions and intuitive syntax reductions. Also there's the way (superuser only) to pass-through of plain SQL.
