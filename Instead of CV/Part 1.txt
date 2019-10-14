@@ -15,7 +15,7 @@ So, it was a good place to build my first proof-of-concept. I've been started to
 The main ideas:
 1. Do lookup for each mail address. Don't enqueue messages with 4xx responses. Because "mail list" is different task.
 * This concept leads to very short queues. At the cost of more latency on processing of the single message. And, of course, more resources for doing lookups. But up(down!) to 0 bounces on well-functioning system.
-It's quit ok for small operator's mail router, and still works in 2019.
+It's quite ok for small operator's mail router, and still works in 2019.
 2. For egress routing, implementation of network/account based limits on messages per minute. All extra messages are rejected with text reply "wait 1 minute". Every attempt to send an extra message during timeout updates the threshold.
 * With this design, client-side spam robots are unable to work at all. After few messages are sent, relaying switches off. Then, client calls support, asks "WTF?", and gets help on eliminating their viruses.
 3. Adaptive gray-listing. As operator, I must relay all the mail. Howeve, some of messages may be deferred for some reasons.
