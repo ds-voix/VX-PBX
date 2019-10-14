@@ -2,7 +2,7 @@
 From the beginning.
 
 In fact, most of my interest lays on different edges of well-known "queuing theory".
-Those edges may be labeled as "messaging systems", "telephony", "virtualization" etc. But, in fact, these concepts are about one thing.
+Those edges may be labeled as "messaging systems", "telephony", "virtualization" etc. But, in general, these concepts are about one thing.
 Thinking in this way, I've built a number of solutions during the past 10+ years.
 
 *Exim-based mail router.*
