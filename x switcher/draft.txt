@@ -1,0 +1,80 @@
+xneur is dead nowadays. The project code looks unusable (for me).
+Besides the "fatal flaw", there's at least one problem. It all was the try to build "punto switcher for linux".
+But no, PS is erroneous by design! It resides too high in OS abstractions.
+PS is buggy enough inside semi-stable m$ windows (e.g. it drops virtualBox buffer integration).
+And xNeur brings all the problems to fully unstable linux windows (kde, gnome, …de and so on in the zoo)!
+
+The problem flows from the idea of "auto-correction". But! I have no need in "auto"!
+Quite the contrary, I have the need in "always predictable".
+Just to correct the "shit, again I'd started to type with incorrect char table!".
+* And m.b. supplementary task: to attach the encoding to windows.
+
+Try to do it in the obvious (for me) way.
+Below is "ToDo" draft. All things must be done at x-org level.
+* Not X? Alternatives must have the usable interfaces to do the same things, otherwise they are unusable.
+** Samples uses shell-level enrollments. But the logic must be realized a bit deeper than bash does.
+
+M.b., play with golang? (c|cpp look as the overkill, python is unstable with its 3.x zoo, perl is ok but only for me)
+No, shit # https://github.com/golang/exp/tree/master/shiny/driver/gldriver
+
+Within python: https://stackoverflow.com/questions/29638210/how-can-i-use-python-xlib-to-generate-a-single-keypress
+…The same shit. However, c++ still rules?
+
+
+### zypper install xdotool xinput xmodmap
+
+xdotool type "Hello world!"
+xdotool key H e l l o space w o r l d exclam x x BackSpace BackSpace
+
+(sleep 5; xdotool key BackSpace) &
+
+# xinput list |   grep -Po 'id=\K\d+(?=.*slave\s*keyboard)' |   xargs -P0 -n1 
+xinput test
+key release 36
+key press   65
+key release 65
+key press   38
+key release 38
+
+xdotool key 22 22 41 42
+(sleep 1; xdotool key 37 38 22 22 37 38 39) &
+
+
+### ToDo ###
+1. Log xinput >> buffer
+# xmodmap -pk = show keymap table
+## m.b. used for auto-tune the switcher
+# xmodmap -pke = the same, in xmodmap syntax
+# xmodmap -pm = show modifiers
+** 65 = space 36 = Return 37 = lCtrl 105 = rCtrl
+** 127 = pause 50 = lShift 62 = rShift
+
+2. Drop buffer after specific events
+
+3. On "switch" event:
+- don't log it to buffer
+- send 22 * valid_alphanum_count (drop entered by backspaces)
+- do "switch input lanuage" (m.b. through  xdotool keydown/keyup)
+- drop stored buffer, as it will be sent again
+- send buffer again (through xdotool)
+
+
+### MOUSE keys ###
+xinput list | grep -Po 'id=\K\d+(?=.*slave\s*pointer)' |   xargs -P0 -n1 
+xinput test | grep -v motion
+
+
+### SPECIAL keys ###
+- don't log sequences... (e.g. F1..F12)
+- don't count (?) sequences... (e.g. accent modifiers) ¡depends on editor 
+behavior! M.b. =1, m.b. =2 backspaces!
+- "compose" sequences, like rAlt_down-4-5-rAlt_up >> ⅘ >> 1 uChar
+- drop buffer sequences... (enter, lMouse etc.)
+- word separators (space, tab etc.)
+- state keys: state must be set at the beginning of replay, released at the 
+end.
+
+
+### (?) Get current window (class?/app_name) >> adapt switcher behavior ###
+(sleep 5; cat /proc/$(xdotool getwindowpid $(xdotool getwindowfocus))/comm)
+(sleep 5; cat /proc/$(xdotool getwindowpid $(xdotool getwindowfocus))/cmdline)
