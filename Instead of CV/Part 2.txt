@@ -1,0 +1,23 @@
+*Part 2. Attempting to improve the world.*
+*Flowcharts markup language, together with it's modular translator.* https://github.com/ds-voix/VX-PBX/tree/master/VX
+As it's described above, about all of my R&D can be treated as "backend". In fact, I avoid to build frontends, because it requires very different skills. (And is poorly paid as well… Thus, leading to problems in open-source desktops).
+Ok, but setting up PBX by means of UPSERT objects (as described in previous part) was still too complex for interns.
+As for Russia, most of intern engineers already know flowcharts. The idea was:
+— Someone can explain what to do with the phone call. How to process it, from initiation to termination.
+— The specialist can draw this explanation as flowchart.
+— The PBX internals are already flowchart-driven.
+¡ Just do an intermediate layer! And make it human readable. (Because I can afford. There was already an example in old network simulator, but it was too weak for my goals.)
+
+I believe that this project is my best so far. The translator is modular enough, so no restrictions on what to do.
+The syntax (I was named it "VX" as "Very eXtendable") is applicable in the same places where flowcharts are.
+Right now, it works (together with completely distinct module sets) in:
+— PBX: translation to UPSERT objects, also templating for telephone devices.
+— SAN: connecting LUN's to hosts (VM's on hypervisors) now don't requires high skills. Thus, my storage network has grown from a few dozen to many hundreds of objects over the past three years.
+— PCI-DSS compliant software deployment pipeline. As the core processes can be considered to be flowchart, I was interconnected the schema by means of VX. And the "zero" cycle took only 1 month from paper drafts to working prototype (testing zone, validating zone, production site). Because most of the time was spent on building the conveyor modules, while interconnection was already obvious.
+
+As for syntax, it is still based on INI/CFG style. Because, on the one hand, it is obvious for humans. And on the other hand,  the trivial task is to translate cross json, xml, yaml, toml and other similar grammatics. That is, machine-side presentation can be any.
+
+*Few details*
+The only one keyword in grammar: "Action" (internal grammar is case-insensitive, but managed objects can be case sensitive, or not). The "Action" represents an arrow in the flowchart, while object definitions are in square brackets. All other words are reading into object parameters. At the end of object, the function with its name is called. If one is defined in linked modules. Yes, the very simple way to do*.
+
+* Of course, there can be forks, combs and so on in schemas. Therefore, the full grammar is in fact a bit more complicated than the description above.
