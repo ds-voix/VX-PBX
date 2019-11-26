@@ -1,0 +1,20 @@
+*Part 3. From PBX to virtualization and data center management. Transition period.*
+Being a highly qualified engineer, I am at the same time a weak businessman. M.b. because good businessman have to lie time-to-time. "Destroy to win." Engineering tasks eliminate the lie, otherwise constructs became broken.
+Overall economics in Russia stays in stagnation since (at least) 2011, as it can be seen e.g. from oil consumption monitoring. As a result, most of telecoms are in stagnation as well. Engage in complex engineering is out-of-trend. My remaining telecom projects still carries money in 2019, but too few.
+The obvious question was "what the next"? Where is the money still located, and also where are enough engineering tasks?
+
+When a startup is small, it usually needs cheaper resources. HR also. But what to do when it grows (e.g. due to well-chosen direction)?
+At this point of life, the project is becoming extremely unstable (and, in most cases, dies in few years). Inexperienced specialists just has no view about large systems behavior. Lack in skills.
+But this point is also the best entry point for high-skilled engineer. (Of course, such a problematic project must still have enough durability. Otherwise no time to deal with it.)
+
+My first attempt was (as usual) a bit unsuccessful. The project was already under destruction by top management, so I returned to dealing with telecoms, till the second chance.
+* Of course, at that time I also did some development. My employer had some deviations, which had led to abnormal projects:
+— PBX spamming robot (sorry, it still works). Up to 20M calls per week.
+— Very long (asterisk-based) call queues. Up to 720 pending calls (full load for 24xE1). Worse than in Soviet Union shops in 1980-x /in couple with contemporary Crete airport/.
+Yes, technically interesting. Like nuclear bomb.
+
+Asterisk out-of-the-box queues was a bit unsuitable for this manner of implementation, so I made a number of improvements in code. More flexible music-on-hold in couple with a mechanism to allow caller to obtain his last place after hangup/reconnect. https://github.com/ds-voix/VX-PBX/tree/master/Asterisk
+* Q: Why asterisk only? A: Because it was made by engineers for engineers. So, it's highly convenient to deal with. I also have been constructed freeswitch-based interfaces etc., but only for what Asterisk cannot do at all. Therefore, I suppose this solutions are too special and "out-of-the-road".
+— But also one good deed: VX abstraction was realized at these times, to allow interns (no other staff was available) to deal with PBX.
+
+…But the second try was successful enough, so I'm still engineering this project.
