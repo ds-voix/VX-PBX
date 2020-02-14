@@ -1,7 +1,7 @@
 Huh, telemetry is the global trend.
 But this service stands aside from privacy draining. It's about early IP addresses duplicates detection.
 
-I know no one "silver bullet" working on all topologies. This one implies the intranet with m.b. thouthands hosts across the number of vlan's.
+I know no one "silver bullet" working on all topologies. This one implies the intranet with m.b. thousands hosts across the number of vlan's.
 There can appear duplicates. E.g. due to split-brain in CARP, or defective IP management (some parts of openStack) and so on.
 Therefore, while I'm responsible for such a network, I have no correct view outside of hosts.
 
