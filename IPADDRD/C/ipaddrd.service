@@ -1,0 +1,17 @@
+# /lib/systemd/system/ipaddrd.service
+[Unit]
+Description=ipaddrd - Report host ip addresses via UDP, for early dup detection.
+
+[Service]
+Type=forking
+#PIDFile=/run/ipaddrd.pid #
+
+Environment="HOST=controller:3333" "DELAY=25" "INTERVAL=15" "RANDOM=1"
+EnvironmentFile=-/etc/default/ipaddrd
+
+ExecStart=/usr/local/sbin/ipaddrd -T ${DELAY} -t ${INTERVAL} -r ${RANDOM} -p /run/ipaddrd.pid ${HOST}
+Restart=always
+RestartSec=7s
+
+[Install]
+WantedBy=multi-user.target
