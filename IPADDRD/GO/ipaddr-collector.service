@@ -1,0 +1,17 @@
+# /lib/systemd/system/ipaddr-collector.service
+[Unit]
+Description=ipaddr-collector - Collects host ip addresses via UDP, for early dup detection.
+
+[Service]
+Type=forking
+#PIDFile=/run/ipaddr-collector.pid #
+
+Environment=""
+EnvironmentFile=-/etc/default/ipaddr-collector
+
+ExecStart=/usr/local/sbin/ipaddr-collector
+Restart=always
+RestartSec=7s
+
+[Install]
+WantedBy=multi-user.target
