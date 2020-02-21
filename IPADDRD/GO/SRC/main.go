@@ -1,7 +1,7 @@
 package main
 
 /*
- ipaddr-collector v0.1
+ ipaddr-collector v0.2
 
 /////////////////////////////////////////////////////////////////////////////
  Copyright (C) 2020 Dmitry Svyatogorov ds@vo-ix.ru
@@ -61,8 +61,8 @@ var (
 	RRL_FILE = flag.StringP("rrl_file_name", "f", "RRL", "File to put RRL stats into (relative to temporary path)")
     RRL_FILE_MAX = flag.Int64P("rrl_file_max", "m", 1024 * 1024, "RRL file maximum size, in bytes")
     // Prefer to use tmpfs for reporting
-	REPORT_PATH = flag.StringP("report_path", "p", "/run/ipaddrd", "Store consistent reports under this path")
-	REPORT_PATH_NEW = flag.StringP("report_path_tmp", "P", "/run/ipaddrd.tmp", "Store ditry reports under this path")
+	REPORT_PATH = flag.StringP("report_path", "p", "/run/ipaddrd/reports", "Store consistent reports under this path")
+	REPORT_PATH_NEW = flag.StringP("report_path_tmp", "P", "/run/ipaddrd/tmp", "Store ditry reports under this path")
 
 	// Syslog logger
 	SYSLOG *syslog.Writer
@@ -190,7 +190,7 @@ func serve(pc net.PacketConn, addr net.Addr, buf []byte) {
 	frame_uuid, _ = uuid.FromBytes(buf[length-4-16 : length-4])
 
 	report_file := *REPORT_PATH_NEW + "/" + frame_uuid.String()
-	f, err := os.OpenFile(report_file, os.O_RDWR|os.O_CREATE, 0600)
+	f, err := os.OpenFile(report_file, os.O_RDWR|os.O_CREATE, 0640)
 	if err != nil {
 		panic(fmt.Errorf("%s Error: %s", report_file, err.Error()))
 	}
@@ -271,7 +271,7 @@ func listen_udp() {
 				}
 
 				if f == nil {
-					f, err = os.OpenFile(report, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0600)
+					f, err = os.OpenFile(report, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0640)
 					if err != nil {
 						panic(fmt.Errorf("%s Error: %s", report, err.Error()))
 					}
@@ -329,11 +329,11 @@ func main() {
 		panic(fmt.Errorf("RRL factor must be from 1k to 100M, but is \"%d\"", *RRL_FILE_MAX))
     }
 
-	if err := os.MkdirAll(*REPORT_PATH, 0700); err != nil {
+	if err := os.MkdirAll(*REPORT_PATH, 0750); err != nil {
 		panic(fmt.Errorf("Unable to create report path \"%s\": %s", *REPORT_PATH, err.Error()))
 	}
 
-	if err := os.MkdirAll(*REPORT_PATH_NEW, 0700); err != nil {
+	if err := os.MkdirAll(*REPORT_PATH_NEW, 0750); err != nil {
 		panic(fmt.Errorf("Unable to create report path \"%s\": %s", *REPORT_PATH_NEW, err.Error()))
 	}
 
@@ -376,7 +376,7 @@ func main() {
 		dcnt := &daemon.Context {
 			PidFileName: "/run/ipaddr-collector.pid",
 			PidFilePerm: 0644,
-			Umask:       177,
+			Umask:       0117,
 			Credential: cred,
 		}
 
