@@ -1,12 +1,32 @@
-// https://www.kernel.org/doc/html/latest/input/event-codes.html
-// https://www.kernel.org/doc/html/latest/input/uinput.html
-
-// https://janczer.github.io/work-with-dev-input/
-// https://godoc.org/github.com/gvalkov/golang-evdev#example-Open
-// https://github.com/ds-voix/VX-PBX/blob/master/x%20switcher/draft.txt
-
-// https://github.com/BurntSushi/xgb/blob/master/examples/get-active-window/main.go
 package main
+/*
+ xswitcher v0.2
+/////////////////////////////////////////////////////////////////////////////
+ Copyright (C) 2020 Dmitry Svyatogorov ds@vo-ix.ru
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU Affero General Public License as
+    published by the Free Software Foundation, either version 3 of the
+    License, or (at your option) any later version.
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU Affero General Public License for more details.
+    You should have received a copy of the GNU Affero General Public License
+    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+/////////////////////////////////////////////////////////////////////////////
+
+  In v0.2, a number of obvious stupid things was fixed.
+  Still PoC with hardcoded settings, but less buggy.
+Referrers:
+ https://www.kernel.org/doc/html/latest/input/event-codes.html
+ https://www.kernel.org/doc/html/latest/input/uinput.html
+
+ https://janczer.github.io/work-with-dev-input/
+ https://godoc.org/github.com/gvalkov/golang-evdev#example-Open
+ https://github.com/ds-voix/VX-PBX/blob/master/x%20switcher/draft.txt
+
+ https://github.com/BurntSushi/xgb/blob/master/examples/get-active-window/main.go
+*/
 
 /*
  #cgo LDFLAGS: -lX11
@@ -34,7 +54,7 @@ import (
 //type timeval C.struct_timeval
 //type input_event C.struct_input_event
 
-type ctrl struct {
+type ctrl_ struct {
 	KEY_LEFTCTRL bool;
 	KEY_LEFTSHIFT bool;
 	KEY_RIGHTSHIFT bool;
@@ -43,6 +63,15 @@ type ctrl struct {
 	KEY_RIGHTALT bool;
 	KEY_LEFTMETA bool;
 	KEY_RIGHTMETA bool;
+}
+
+type control struct {
+    last_seen time.Time
+	ctrl ctrl_
+    caps_lock bool
+    num_lock bool
+	bs_count int
+	char_count int
 }
 
 type t_key struct {
@@ -57,11 +86,12 @@ var (
 	DEV_KEYBOARD = "/dev/input/event0"
 
 	X *xgb.Conn
+	display *_Ctype_struct__XDisplay
 	kb keybd_event.KeyBonding
 	window_keys = make(map [xproto.Window]t_keys) // keys pressed in window
 	// !!! Note as windows are replaced in time, this structure will leak.
 	// There must be added some TTL to just to remove "stolen cache" from map.
-	window_last_seen = make(map [xproto.Window]time.Time)
+	window_ctrl = make(map [xproto.Window]control)
 
 	// const: each array is evaluated in go, so can't be declared as "const"
 	LANG = t_keys{{evdev.KEY_LEFTCTRL, 1}, {evdev.KEY_LEFTCTRL, 0}} // Cyclic switch
@@ -73,11 +103,13 @@ var (
 
 	keyboardEvents = make(chan t_key, 4)
 	miceEvents = make(chan t_key, 4)
+
+    ActiveWindowId_ xproto.Window // Cache ActiveWindowId() along key processing
 )
 
 // There must be 1 buffer per each X-window.
 // Or just reset the buffer on each focus change?
-func ActiveWindowId() (xproto.Window) { // xproto.Window == uint32
+func ActiveWindowId() { // xproto.Window == uint32
 	// Get the window id of the root window.
 	setup := xproto.Setup(X)
 	root := setup.DefaultScreen(X).Root
@@ -87,7 +119,8 @@ func ActiveWindowId() (xproto.Window) { // xproto.Window == uint32
 	activeAtom, err := xproto.InternAtom(X, true, uint16(len(aname)),
 		aname).Reply()
 	if err != nil {
-		return 0
+		ActiveWindowId_ = 0
+		return
 	}
 
 	// Get the actual value of _NET_ACTIVE_WINDOW.
@@ -98,22 +131,80 @@ func ActiveWindowId() (xproto.Window) { // xproto.Window == uint32
 	reply, err := xproto.GetProperty(X, false, root, activeAtom.Atom,
 		xproto.GetPropertyTypeAny, 0, (1<<32)-1).Reply()
 	if err != nil {
-		return 0
+		ActiveWindowId_ = 0
+		return
 	}
-	windowId := xproto.Window(xgb.Get32(reply.Value))
-	return windowId
-//	fmt.Printf("Active window id: %X\n", windowId)
+	ActiveWindowId_ = xproto.Window(xgb.Get32(reply.Value))
+	return
 }
 
 
+// Remove old data from maps
+func WindowTTL() {
+	return
+}
+
+func UpdateKeys(event t_key) {
+	ctrl, ok := window_ctrl[ActiveWindowId_]
+	if !ok { // New window
+		WindowTTL()
+	}
+
+	window_keys[ActiveWindowId_] = append(window_keys[ActiveWindowId_], event)
+
+	ctrl.last_seen = time.Now()
+//    window_ctrl[ActiveWindowId_].last_seen = time.Now()
+	key := event.code
+	val := event.value
+	switch key {
+	case evdev.KEY_LEFTCTRL:
+		ctrl.ctrl.KEY_LEFTCTRL = (val > 0)
+	case evdev.KEY_LEFTSHIFT:
+		ctrl.ctrl.KEY_LEFTSHIFT = (val > 0)
+	case evdev.KEY_RIGHTSHIFT:
+		ctrl.ctrl.KEY_RIGHTSHIFT = (val > 0)
+	case evdev.KEY_LEFTALT:
+		ctrl.ctrl.KEY_LEFTALT = (val > 0)
+	case evdev.KEY_RIGHTCTRL:
+		ctrl.ctrl.KEY_RIGHTCTRL = (val > 0)
+	case evdev.KEY_RIGHTALT:
+		ctrl.ctrl.KEY_RIGHTALT = (val > 0)
+	case evdev.KEY_LEFTMETA:
+		ctrl.ctrl.KEY_LEFTMETA = (val > 0)
+	case evdev.KEY_RIGHTMETA:
+		ctrl.ctrl.KEY_RIGHTMETA = (val > 0)
+	case evdev.KEY_CAPSLOCK:
+		if val == 0 { ctrl.caps_lock = !ctrl.caps_lock }
+	case evdev.KEY_NUMLOCK:
+		if val == 0 { ctrl.num_lock = !ctrl.num_lock }
+	case evdev.KEY_BACKSPACE:
+		if val > 0 {
+			ctrl.bs_count++
+		} else {
+//			fmt.Println(ActiveWindowId_, ctrl.bs_count, ctrl.char_count)
+			if ctrl.bs_count >= ctrl.char_count {
+//				fmt.Println("*")
+				window_keys[ActiveWindowId_] = nil
+				ctrl.bs_count = 0
+				ctrl.char_count = 0
+			}
+		}
+
+	default:
+		if val > 0 { ctrl.char_count++ }
+	}
+
+	window_ctrl[ActiveWindowId_] = ctrl
+}
+
 func Compare(pattern t_keys, back int) (bool) {
-    if len(window_keys[ActiveWindowId()]) - back < len(pattern) {
+    if len(window_keys[ActiveWindowId_]) - back < len(pattern) {
 		return false
 	}
 	l := len(pattern)
-	offset := len(window_keys[ActiveWindowId()]) - l - back
+	offset := len(window_keys[ActiveWindowId_]) - l - back
 	for i := l - 1; i >= 0; i-- {
-		if pattern[i] != window_keys[ActiveWindowId()][offset + i] {
+		if pattern[i] != window_keys[ActiveWindowId_][offset + i] {
 			return false
 		}
 	}
@@ -123,8 +214,8 @@ func Compare(pattern t_keys, back int) (bool) {
 
 func CtrlSeqence() (bool) { // CTRL + some_key
 	var ctrl = t_key{evdev.KEY_LEFTCTRL, 0}
-	l := len(window_keys[ActiveWindowId()])
-	w := ActiveWindowId()
+	l := len(window_keys[ActiveWindowId_])
+	w := ActiveWindowId_
 	if l < 4 { return false	}
 
 	if window_keys[w][l - 1] != ctrl {
@@ -139,8 +230,8 @@ func CtrlSeqence() (bool) { // CTRL + some_key
 
 func SpaceSeqence() (bool) { // some_key after space
 	var space = t_key{evdev.KEY_SPACE, 0}
-	l := len(window_keys[ActiveWindowId()])
-	w := ActiveWindowId()
+	l := len(window_keys[ActiveWindowId_])
+	w := ActiveWindowId_
 	if l < 4 { return false	}
 
 	if window_keys[w][l - 1].code == evdev.KEY_SPACE ||  window_keys[w][l - 1].code == evdev.KEY_BACKSPACE {
@@ -159,47 +250,64 @@ func SpaceSeqence() (bool) { // some_key after space
 }
 
 
+func Drop_() {
+	window_keys[ActiveWindowId_] = nil
+
+	ctrl := window_ctrl[ActiveWindowId_]
+	ctrl.last_seen = time.Now()
+	ctrl.bs_count = 0
+	ctrl.char_count = 0
+	window_ctrl[ActiveWindowId_] = ctrl
+	return
+}
+
+
 func Drop() {
-	window_keys[ActiveWindowId()] = nil
+    ActiveWindowId()
+	Drop_()
 	return
 }
 
 
 func Add(event t_key) {
-	code := uint16(event.code)
-	value := int32(event.value)
+//	code := uint16(event.code)
+//	value := int32(event.value)
+    ActiveWindowId()
 
-	window_keys[ActiveWindowId()] = append(window_keys[ActiveWindowId()], t_key{code, value})
-	l := len(window_keys[ActiveWindowId()])
+	UpdateKeys(event)
+	l := len(window_keys[ActiveWindowId_])
 
 	if Compare(SWITCH, 0) {
-		Switch(window_keys[ActiveWindowId()][ : l-len(SWITCH)])
+//	    fmt.Printf("code=%d keys=%v\n", code, window_keys[ActiveWindowId_])
+		Switch(window_keys[ActiveWindowId_][ : l-len(SWITCH)])
 		return
 	}
 	if Compare(LANG_0, 0) {
 		LanguageSwitch(0)
-		window_keys[ActiveWindowId()] = nil
+		Drop_()
 		return
 	}
 	if Compare(LANG_1, 0) {
 		LanguageSwitch(1)
-		window_keys[ActiveWindowId()] = nil
+		Drop_()
 		return
 	}
 	if Compare(LANG, 0) {
 		LanguageSwitch(-1)
-		window_keys[ActiveWindowId()] = nil
+		Drop_()
 		return
 	}
 
 	if CtrlSeqence() {
-		window_keys[ActiveWindowId()] = nil
+		Drop_()
 		return
 	}
 
-	if SpaceSeqence() {
-	    fmt.Printf("%d %v", code, window_keys[ActiveWindowId()])
-		window_keys[ActiveWindowId()] = t_keys{ window_keys[ActiveWindowId()][l - 2], window_keys[ActiveWindowId()][l - 1] }
+	if SpaceSeqence() { // Drop all but last key
+		k2 := window_keys[ActiveWindowId_][l - 2]
+		k1 := window_keys[ActiveWindowId_][l - 1]
+		Drop_()
+		window_keys[ActiveWindowId_] = t_keys{ k2, k1 }
 	}
 
 	return
@@ -209,12 +317,6 @@ func Add(event t_key) {
 func LanguageSwitch(lang int) {
 	state := new(_Ctype_struct__XkbStateRec)
 	layout := _Ctype_uint(0)
-
-	display := C.XOpenDisplay(nil);
-    if display == nil {
-		fmt.Printf("Errot while XOpenDisplay()! Active window id: %X\n", ActiveWindowId())
-		return
-    }
 
 	C.XkbGetState(display, C.XkbUseCoreKbd, state);
 	if lang < 0 {
@@ -303,7 +405,7 @@ func Switch (keys t_keys) {
 		key := keys[i].code
 		val := keys[i].value
 //        Add(key, val)
-		window_keys[ActiveWindowId()] = append(window_keys[ActiveWindowId()], t_key{key, val})
+		window_keys[ActiveWindowId_] = append(window_keys[ActiveWindowId_], t_key{key, val})
 
 		switch key {
 		case evdev.KEY_LEFTCTRL:
@@ -364,6 +466,11 @@ func keyboard() {
 
 func main() {
 	var err error
+
+	display = C.XOpenDisplay(nil);
+    if display == nil {
+		panic("Errot while XOpenDisplay()!")
+    }
 
 	X, err = xgb.NewConn()
 	if err != nil {
