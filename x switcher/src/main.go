@@ -1,6 +1,6 @@
 package main
 /*
- xswitcher v0.2
+ xswitcher v0.4
 /////////////////////////////////////////////////////////////////////////////
  Copyright (C) 2020 Dmitry Svyatogorov ds@vo-ix.ru
     This program is free software: you can redistribute it and/or modify
@@ -16,7 +16,19 @@ package main
 /////////////////////////////////////////////////////////////////////////////
 
   In v0.2, a number of obvious stupid things was fixed.
+  In v0.3, xgb was pissed out. Call X11 directly. Also, window class matching "BYPASS" added (regex).
+  (!) Improper behaviour found whith repeated keys (val=2)!
+      Looks as the X codes are filtered at the higher level (X-server).
+      So, I must drop sequences with repeat detected, or tune rate.
+      ** Or replay all codes 1:1, so the next step is to replace micmonay/keybd_event
+
+  In 0.4, device autoscan was implemented. * FIXME It's completely invalid to write single channel concurrently!
+  * Alternate way is to use something like XSelectExtensionEvent() >> XNextEvent() like in https://github.com/freedesktop/xorg-xinput/blob/master/src/test.c
+    X libs stays on higher level, so it looses the proper way to grab exact short key press and so on.
+    But it's also the only way to e.g. pass through VNC connections.
+
   Still PoC with hardcoded settings, but less buggy.
+
 Referrers:
  https://www.kernel.org/doc/html/latest/input/event-codes.html
  https://www.kernel.org/doc/html/latest/input/uinput.html
@@ -26,12 +38,28 @@ Referrers:
  https://github.com/ds-voix/VX-PBX/blob/master/x%20switcher/draft.txt
 
  https://github.com/BurntSushi/xgb/blob/master/examples/get-active-window/main.go
+
+ xgb is dumb overkill. To be replaced.
+ X11 XGetInputFocus() etc. HowTo:
+ https://gist.github.com/kui/2622504
 */
 
 /*
  #cgo LDFLAGS: -lX11
- #include <X11/Xlib.h>
- #include <X11/XKBlib.h>
+ #include <X11/Xlib.h>        // (libX11-devel | libx11-dev) + (libXmu-devel | libxmu-dev >> WinUtil.h)
+ #include <X11/Xmu/WinUtil.h> // Query windows (focus, name, etc.)
+ #include <X11/XKBlib.h>      // Switch window language ("layout")
+
+ Bool xerror = False;
+
+ extern int handle_error(Display* display, XErrorEvent* error) {
+   xerror = True;
+   return 1;
+ }
+
+ void set_handle_error() {
+   XSetErrorHandler(handle_error);
+ }
 */
 import "C"
 
@@ -39,20 +67,15 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+//	"io/ioutil"
 	"os"
+	"regexp"
 	"syscall"
 	"time"
 
 	"github.com/gvalkov/golang-evdev"
 	"github.com/micmonay/keybd_event"
-
-	"github.com/BurntSushi/xgb"
-	"github.com/BurntSushi/xgb/xproto"
 )
-
-//type uinput_user_dev C.struct_uinput_user_dev
-//type timeval C.struct_timeval
-//type input_event C.struct_input_event
 
 type ctrl_ struct {
 	KEY_LEFTCTRL bool;
@@ -66,10 +89,10 @@ type ctrl_ struct {
 }
 
 type control struct {
-    last_seen time.Time
+	last_seen time.Time
 	ctrl ctrl_
-    caps_lock bool
-    num_lock bool
+	caps_lock bool
+	num_lock bool
 	bs_count int
 	char_count int
 }
@@ -82,16 +105,14 @@ type t_key struct {
 type t_keys []t_key
 
 var (
-	DEV_MOUCE = "/dev/input/event3"
-	DEV_KEYBOARD = "/dev/input/event0"
+    DEV_INPUT = "/dev/input/event*"
 
-	X *xgb.Conn
-	display *_Ctype_struct__XDisplay
+	display *C.struct__XDisplay
 	kb keybd_event.KeyBonding
-	window_keys = make(map [xproto.Window]t_keys) // keys pressed in window
+	window_keys = make(map [C.Window]t_keys) // keys pressed in window
 	// !!! Note as windows are replaced in time, this structure will leak.
 	// There must be added some TTL to just to remove "stolen cache" from map.
-	window_ctrl = make(map [xproto.Window]control)
+	window_ctrl = make(map [C.Window]control)
 
 	// const: each array is evaluated in go, so can't be declared as "const"
 	LANG = t_keys{{evdev.KEY_LEFTCTRL, 1}, {evdev.KEY_LEFTCTRL, 0}} // Cyclic switch
@@ -104,37 +125,46 @@ var (
 	keyboardEvents = make(chan t_key, 4)
 	miceEvents = make(chan t_key, 4)
 
-    ActiveWindowId_ xproto.Window // Cache ActiveWindowId() along key processing
+	// ActiveWindowId() global vars
+	ActiveWindowId_ C.Window // Cache ActiveWindowId() along key processing
+	revert_to C.int // Set 1-thread vars out of GC
+	x_class *C.XClassHint
+	ActiveWindowClass_ string
+
+	BYPASS = regexp.MustCompile(`^VirtualBox`)
+	bypass = false
 )
+
 
 // There must be 1 buffer per each X-window.
 // Or just reset the buffer on each focus change?
-func ActiveWindowId() { // xproto.Window == uint32
-	// Get the window id of the root window.
-	setup := xproto.Setup(X)
-	root := setup.DefaultScreen(X).Root
-
-	// Get the atom id (i.e., intern an atom) of "_NET_ACTIVE_WINDOW".
-	aname := "_NET_ACTIVE_WINDOW"
-	activeAtom, err := xproto.InternAtom(X, true, uint16(len(aname)),
-		aname).Reply()
-	if err != nil {
+func ActiveWindowId() { // _Ctype_Window == uint32
+    ActiveWindowId_old := ActiveWindowId_
+	if C.XGetInputFocus(display, &ActiveWindowId_, &revert_to) == 0 {
 		ActiveWindowId_ = 0
+		fmt.Println(C.XGetInputFocus(display, &ActiveWindowId_, &revert_to))
+	}
+	if ActiveWindowId_ == ActiveWindowId_old { return }
+
+	if ActiveWindowId_ <= 1 {
+		bypass = true
 		return
 	}
 
-	// Get the actual value of _NET_ACTIVE_WINDOW.
-	// Note that 'reply.Value' is just a slice of bytes, so we use an
-	// XGB helper function, 'Get32', to pull an unsigned 32-bit integer out
-	// of the byte slice. We then convert it to an X resource id so it can
-	// be used to get the name of the window in the next GetProperty request.
-	reply, err := xproto.GetProperty(X, false, root, activeAtom.Atom,
-		xproto.GetPropertyTypeAny, 0, (1<<32)-1).Reply()
-	if err != nil {
-		ActiveWindowId_ = 0
-		return
-	}
-	ActiveWindowId_ = xproto.Window(xgb.Get32(reply.Value))
+	// !!! "X Error of failed request:  BadWindow (invalid Window parameter)" in case of window was gone.
+    // https://eli.thegreenplace.net/2019/passing-callbacks-and-pointers-to-cgo/
+	// https://artem.krylysov.com/blog/2017/04/13/handling-cpp-exceptions-in-go/
+	// >>> https://stackoverflow.com/questions/32947511/cgo-cant-set-callback-in-c-struct-from-go
+    if C.XGetClassHint(display, ActiveWindowId_, x_class) > 0 { // "VirtualBox Machine"
+        if ActiveWindowClass_ != C.GoString(x_class.res_name) {
+			ActiveWindowClass_ = C.GoString(x_class.res_name)
+			bypass = BYPASS.MatchString(ActiveWindowClass_)
+			fmt.Println(ActiveWindowClass_)
+		}
+    }
+    if C.xerror == C.True { // ??? Is there some action needed?
+		C.xerror = C.False
+    }
 	return
 }
 
@@ -153,7 +183,6 @@ func UpdateKeys(event t_key) {
 	window_keys[ActiveWindowId_] = append(window_keys[ActiveWindowId_], event)
 
 	ctrl.last_seen = time.Now()
-//    window_ctrl[ActiveWindowId_].last_seen = time.Now()
 	key := event.code
 	val := event.value
 	switch key {
@@ -181,9 +210,7 @@ func UpdateKeys(event t_key) {
 		if val > 0 {
 			ctrl.bs_count++
 		} else {
-//			fmt.Println(ActiveWindowId_, ctrl.bs_count, ctrl.char_count)
 			if ctrl.bs_count >= ctrl.char_count {
-//				fmt.Println("*")
 				window_keys[ActiveWindowId_] = nil
 				ctrl.bs_count = 0
 				ctrl.char_count = 0
@@ -215,13 +242,28 @@ func Compare(pattern t_keys, back int) (bool) {
 func CtrlSeqence() (bool) { // CTRL + some_key
 	var ctrl = t_key{evdev.KEY_LEFTCTRL, 0}
 	l := len(window_keys[ActiveWindowId_])
-	w := ActiveWindowId_
 	if l < 4 { return false	}
 
-	if window_keys[w][l - 1] != ctrl {
+	if window_keys[ActiveWindowId_][l - 1] != ctrl {
 		return false
 	}
-	if window_keys[w][l - 2].code != evdev.KEY_LEFTCTRL {
+	if window_keys[ActiveWindowId_][l - 2].code != evdev.KEY_LEFTCTRL {
+		return true
+	}
+	return false
+}
+
+func RepeatSeqence() (bool) { // ...val=2, val=0
+	l := len(window_keys[ActiveWindowId_])
+	if l < 2 { return false	}
+
+	if window_keys[ActiveWindowId_][l - 2].value != 2 {
+		return false
+	}
+	if window_keys[ActiveWindowId_][l - 1].value != 0 {
+		return false
+	}
+	if window_keys[ActiveWindowId_][l - 1].code == window_keys[ActiveWindowId_][l - 2].code {
 		return true
 	}
 	return false
@@ -231,19 +273,18 @@ func CtrlSeqence() (bool) { // CTRL + some_key
 func SpaceSeqence() (bool) { // some_key after space
 	var space = t_key{evdev.KEY_SPACE, 0}
 	l := len(window_keys[ActiveWindowId_])
-	w := ActiveWindowId_
 	if l < 4 { return false	}
 
-	if window_keys[w][l - 1].code == evdev.KEY_SPACE ||  window_keys[w][l - 1].code == evdev.KEY_BACKSPACE {
+	if window_keys[ActiveWindowId_][l - 1].code == evdev.KEY_SPACE ||  window_keys[ActiveWindowId_][l - 1].code == evdev.KEY_BACKSPACE {
 		return false
 	}
-	if window_keys[w][l - 2].code == evdev.KEY_SPACE ||  window_keys[w][l - 2].code == evdev.KEY_BACKSPACE {
+	if window_keys[ActiveWindowId_][l - 2].code == evdev.KEY_SPACE ||  window_keys[ActiveWindowId_][l - 2].code == evdev.KEY_BACKSPACE {
 		return false
 	}
-	if window_keys[w][l - 3] != space {
+	if window_keys[ActiveWindowId_][l - 3] != space {
 		return false
 	}
-	if window_keys[w][l - 4].code != evdev.KEY_SPACE {
+	if window_keys[ActiveWindowId_][l - 4].code != evdev.KEY_SPACE {
 		return false
 	}
 	return true
@@ -270,15 +311,13 @@ func Drop() {
 
 
 func Add(event t_key) {
-//	code := uint16(event.code)
-//	value := int32(event.value)
     ActiveWindowId()
+    if bypass { return }
 
 	UpdateKeys(event)
 	l := len(window_keys[ActiveWindowId_])
 
 	if Compare(SWITCH, 0) {
-//	    fmt.Printf("code=%d keys=%v\n", code, window_keys[ActiveWindowId_])
 		Switch(window_keys[ActiveWindowId_][ : l-len(SWITCH)])
 		return
 	}
@@ -298,7 +337,7 @@ func Add(event t_key) {
 		return
 	}
 
-	if CtrlSeqence() {
+	if CtrlSeqence() || RepeatSeqence() {
 		Drop_()
 		return
 	}
@@ -315,8 +354,8 @@ func Add(event t_key) {
 
 
 func LanguageSwitch(lang int) {
-	state := new(_Ctype_struct__XkbStateRec)
-	layout := _Ctype_uint(0)
+	state := new(C.struct__XkbStateRec)
+	layout := C.uint(0)
 
 	C.XkbGetState(display, C.XkbUseCoreKbd, state);
 	if lang < 0 {
@@ -326,19 +365,16 @@ func LanguageSwitch(lang int) {
 			layout = 1
 		}
 	} else {
-		layout = _Ctype_uint(lang)
+		layout = C.uint(lang)
 	}
 
     C.XkbLockGroup(display, C.XkbUseCoreKbd, layout);
 	C.XkbGetState(display, C.XkbUseCoreKbd, state);
-//    fmt.Println(state.group)
-//    time.Sleep(100 * time.Millisecond) // In KDE, language swtching through such a trick takes more than 300ms!
 }
 
 func Switch (keys t_keys) {
-    // Reset window_keys: I daresay that there's no need to remember all shit
-    window_keys = make(map [xproto.Window]t_keys)
-//	fmt.Printf("Active window id: %X %v\n", display, keys)
+    // Reset window_keys: I daresay that there's no need to remember all the shit
+    window_keys = make(map [C.Window]t_keys)
 
 	bs_count := 0
 	char_count := 0
@@ -371,6 +407,7 @@ func Switch (keys t_keys) {
 
 	for i := bs_count; i < char_count; i++ {
 		kb.SetKeys(evdev.KEY_BACKSPACE)
+        time.Sleep(5 * time.Millisecond)
 		err := kb.Launching()
 		if err != nil {
 			panic(err)
@@ -427,6 +464,7 @@ func Switch (keys t_keys) {
 		default:
 		    if val > 0 {
 			kb.SetKeys(int(key))
+	        time.Sleep(5 * time.Millisecond)
 			err := kb.Launching()
 			  if err != nil {
 			  	panic(err)
@@ -438,9 +476,8 @@ func Switch (keys t_keys) {
 }
 
 
-func mouce() {
-	device, _ := evdev.Open(DEV_MOUCE)
-	fmt.Println(device)
+func mouce(device *evdev.InputDevice) {
+//	fmt.Println(device)
 
 	for {
 		event, _ := device.ReadOne()
@@ -451,9 +488,8 @@ func mouce() {
 }
 
 
-func keyboard() {
-	device, _ := evdev.Open(DEV_KEYBOARD)
-	fmt.Println(device)
+func keyboard(device *evdev.InputDevice) {
+//	fmt.Println(device)
 
 	for {
 		event, _ := device.ReadOne()
@@ -471,10 +507,37 @@ func main() {
     if display == nil {
 		panic("Errot while XOpenDisplay()!")
     }
+	// Set callback https://stackoverflow.com/questions/32947511/cgo-cant-set-callback-in-c-struct-from-go
+    C.set_handle_error()
+    x_class = C.XAllocClassHint()
 
-	X, err = xgb.NewConn()
+	dev, err := evdev.ListInputDevices(DEV_INPUT)
 	if err != nil {
 		panic(err)
+	}
+
+	var is_mouce bool
+	var is_keyboard bool
+	for _, device := range dev {
+		is_mouce = false
+		is_keyboard = false
+		for ev := range device.Capabilities {
+			switch ev.Type {
+			case evdev.EV_ABS, evdev.EV_REL:
+				is_mouce = true
+				continue
+			case evdev.EV_KEY:
+				is_keyboard = true
+				continue
+			}
+		}
+		if is_mouce {
+			fmt.Println("mouse:", device.Name)
+		    go mouce(device)
+		} else if is_keyboard {
+			fmt.Println("keyboard:", device.Name)
+            go keyboard(device)
+		}
 	}
 
 	kb, err = keybd_event.NewKeyBonding()
@@ -482,8 +545,6 @@ func main() {
 		panic(err)
 	}
 
-    go mouce()
-    go keyboard()
 
     var event t_key
 	for {
@@ -552,6 +613,9 @@ func main() {
 				Drop()
 		}
 	}
+    os.Exit(0)
+
+// The rest is just the scratch
 
 //	event, _ := device.ReadOne()
 	uinput, err := os.OpenFile("/dev/uinput", os.O_WRONLY | syscall.O_NONBLOCK, 0600)
@@ -572,7 +636,6 @@ func main() {
     uinput.Write(bs)
 
 
-    os.Exit(0)
 //	f, err := os.Open("/dev/input/mouse0")
 	f, err := os.Open("/dev/input/event0")
 	if err != nil {
