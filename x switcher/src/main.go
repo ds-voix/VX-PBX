@@ -1,6 +1,6 @@
 package main
 /*
- xswitcher v0.4
+ xswitcher v0.5
 /////////////////////////////////////////////////////////////////////////////
  Copyright (C) 2020 Dmitry Svyatogorov ds@vo-ix.ru
     This program is free software: you can redistribute it and/or modify
@@ -27,6 +27,8 @@ package main
     X libs stays on higher level, so it looses the proper way to grab exact short key press and so on.
     But it's also the only way to e.g. pass through VNC connections.
 
+  In 0.5, dirty patch for XGetClassHint() was implemented to deal with GTK "windows".
+
   Still PoC with hardcoded settings, but less buggy.
 
 Referrers:
@@ -46,20 +48,7 @@ Referrers:
 
 /*
  #cgo LDFLAGS: -lX11
- #include <X11/Xlib.h>        // (libX11-devel | libx11-dev) + (libXmu-devel | libxmu-dev >> WinUtil.h)
- #include <X11/Xmu/WinUtil.h> // Query windows (focus, name, etc.)
- #include <X11/XKBlib.h>      // Switch window language ("layout")
-
- Bool xerror = False;
-
- extern int handle_error(Display* display, XErrorEvent* error) {
-   xerror = True;
-   return 1;
- }
-
- void set_handle_error() {
-   XSetErrorHandler(handle_error);
- }
+ #include "C/x11.c"
 */
 import "C"
 
@@ -106,6 +95,7 @@ type t_keys []t_key
 
 var (
     DEV_INPUT = "/dev/input/event*"
+	BYPASS_DEVICES = regexp.MustCompile(`(?i)Video|Camera`)
 
 	display *C.struct__XDisplay
 	kb keybd_event.KeyBonding
@@ -142,12 +132,14 @@ func ActiveWindowId() { // _Ctype_Window == uint32
     ActiveWindowId_old := ActiveWindowId_
 	if C.XGetInputFocus(display, &ActiveWindowId_, &revert_to) == 0 {
 		ActiveWindowId_ = 0
-		fmt.Println(C.XGetInputFocus(display, &ActiveWindowId_, &revert_to))
+		fmt.Println("ActiveWindowId_ = 0", C.XGetInputFocus(display, &ActiveWindowId_, &revert_to))
 	}
+//    fmt.Println(ActiveWindowId_)
 	if ActiveWindowId_ == ActiveWindowId_old { return }
 
 	if ActiveWindowId_ <= 1 {
 		bypass = true
+        fmt.Println("ActiveWindowId_ <= 1")
 		return
 	}
 
@@ -155,11 +147,25 @@ func ActiveWindowId() { // _Ctype_Window == uint32
     // https://eli.thegreenplace.net/2019/passing-callbacks-and-pointers-to-cgo/
 	// https://artem.krylysov.com/blog/2017/04/13/handling-cpp-exceptions-in-go/
 	// >>> https://stackoverflow.com/questions/32947511/cgo-cant-set-callback-in-c-struct-from-go
+//    C.XFlush(display)
     if C.XGetClassHint(display, ActiveWindowId_, x_class) > 0 { // "VirtualBox Machine"
         if ActiveWindowClass_ != C.GoString(x_class.res_name) {
 			ActiveWindowClass_ = C.GoString(x_class.res_name)
 			bypass = BYPASS.MatchString(ActiveWindowClass_)
-			fmt.Println(ActiveWindowClass_)
+			fmt.Println("=", ActiveWindowClass_)
+		}
+    } else {
+	    if C.XGetClassHint(display, ActiveWindowId_ - 1, x_class) > 0 { // https://antofthy.gitlab.io/info/X/WindowID.txt
+		    // However the reported ID is generally wrong for GTK apps (like Firefox) and the windows immediate parent is actually needed...
+		    // Typically for GTK the parent window is 1 less than the focus window ... But there is no gurantee that the ID is one less.
+	        if ActiveWindowClass_ != C.GoString(x_class.res_name) {
+				ActiveWindowClass_ = C.GoString(x_class.res_name)
+				bypass = BYPASS.MatchString(ActiveWindowClass_)
+				fmt.Println("*", ActiveWindowClass_)
+			}
+		} else {
+			bypass = false
+			fmt.Println("Empty ActiveWindowClass. M.b. gnome \"window\"?")
 		}
     }
     if C.xerror == C.True { // ??? Is there some action needed?
@@ -518,6 +524,8 @@ func main() {
 
 	var is_mouce bool
 	var is_keyboard bool
+	var skip_it bool
+
 	for _, device := range dev {
 		is_mouce = false
 		is_keyboard = false
@@ -529,8 +537,15 @@ func main() {
 			case evdev.EV_KEY:
 				is_keyboard = true
 				continue
+			case evdev.EV_SYN, evdev.EV_MSC, evdev.EV_SW, evdev.EV_LED, evdev.EV_SND: // EV_SND == "Eee PC WMI hotkeys"
+			default:
+				skip_it = true
+				fmt.Printf("Skipping device: \"%s\" because it has unsupported event type: %x", device.Name, ev.Type)
 			}
 		}
+
+		if skip_it || BYPASS_DEVICES.MatchString(device.Name) { continue }
+
 		if is_mouce {
 			fmt.Println("mouse:", device.Name)
 		    go mouce(device)
