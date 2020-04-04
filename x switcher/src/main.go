@@ -483,10 +483,13 @@ func Switch (keys t_keys) {
 
 
 func mouce(device *evdev.InputDevice) {
-//	fmt.Println(device)
-
 	for {
-		event, _ := device.ReadOne()
+		event, err := device.ReadOne()
+		if err != nil {
+			fmt.Printf("Closing device \"%s\" due to an error:\n\"\"\" %s \"\"\"\n", device.Name, err.Error())
+			return
+		}
+
 		if event.Type == evdev.EV_MSC { // Button events
 			miceEvents <- t_key{event.Code, event.Value}
 		}
@@ -495,10 +498,13 @@ func mouce(device *evdev.InputDevice) {
 
 
 func keyboard(device *evdev.InputDevice) {
-//	fmt.Println(device)
-
 	for {
-		event, _ := device.ReadOne()
+		event, err := device.ReadOne()
+		if err != nil {
+			fmt.Printf("Closing device \"%s\" due to an error:\n\"\"\" %s \"\"\"\n", device.Name, err.Error())
+			return
+		}
+
 		if event.Type == evdev.EV_KEY { // Key events
 			keyboardEvents <- t_key{event.Code, event.Value}
 		}
