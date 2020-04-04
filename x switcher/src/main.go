@@ -95,6 +95,7 @@ type t_keys []t_key
 
 var (
     DEV_INPUT = "/dev/input/event*"
+    TEST_INPUT = "/dev/input/event0"
 	BYPASS_DEVICES = regexp.MustCompile(`(?i)Video|Camera`)
 
 	display *C.struct__XDisplay
@@ -515,13 +516,25 @@ func keyboard(device *evdev.InputDevice) {
 func main() {
 	var err error
 
+	stat, err := os.Stat(TEST_INPUT)
+	if err != nil {
+		panic(err)
+	}
+	now := time.Now()
+
+	// Must wait for DE to be started. Otherwise, DE sees stupid keyboard and unmaps my rigth alt|win at all!
+	if now.Sub(stat.ModTime()) < (10 * time.Second) {
+		time.Sleep(15 * time.Second)
+	}
+
+
 	display = C.XOpenDisplay(nil);
-    if display == nil {
+	if display == nil {
 		panic("Errot while XOpenDisplay()!")
-    }
+	}
 	// Set callback https://stackoverflow.com/questions/32947511/cgo-cant-set-callback-in-c-struct-from-go
-    C.set_handle_error()
-    x_class = C.XAllocClassHint()
+	C.set_handle_error()
+	x_class = C.XAllocClassHint()
 
 	dev, err := evdev.ListInputDevices(DEV_INPUT)
 	if err != nil {
@@ -554,10 +567,10 @@ func main() {
 
 		if is_mouce {
 			fmt.Println("mouse:", device.Name)
-		    go mouce(device)
+			go mouce(device)
 		} else if is_keyboard {
 			fmt.Println("keyboard:", device.Name)
-            go keyboard(device)
+			go keyboard(device)
 		}
 	}
 
