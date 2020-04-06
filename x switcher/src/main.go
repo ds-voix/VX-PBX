@@ -246,7 +246,7 @@ func Compare(pattern t_keys, back int) (bool) {
 }
 
 
-func CtrlSeqence() (bool) { // CTRL + some_key
+func CtrlSequence() (bool) { // CTRL + some_key
 	var ctrl = t_key{evdev.KEY_LEFTCTRL, 0}
 	l := len(window_keys[ActiveWindowId_])
 	if l < 4 { return false	}
@@ -260,7 +260,7 @@ func CtrlSeqence() (bool) { // CTRL + some_key
 	return false
 }
 
-func RepeatSeqence() (bool) { // ...val=2, val=0
+func RepeatSequence() (bool) { // ...val=2, val=0
 	l := len(window_keys[ActiveWindowId_])
 	if l < 2 { return false	}
 
@@ -277,7 +277,7 @@ func RepeatSeqence() (bool) { // ...val=2, val=0
 }
 
 
-func SpaceSeqence() (bool) { // some_key after space
+func SpaceSequence() (bool) { // some_key after space
 	var space = t_key{evdev.KEY_SPACE, 0}
 	l := len(window_keys[ActiveWindowId_])
 	if l < 4 { return false	}
@@ -344,12 +344,12 @@ func Add(event t_key) {
 		return
 	}
 
-	if CtrlSeqence() || RepeatSeqence() {
+	if CtrlSequence() || RepeatSequence() {
 		Drop_()
 		return
 	}
 
-	if SpaceSeqence() { // Drop all but last key
+	if SpaceSequence() { // Drop all but last key
 		k2 := window_keys[ActiveWindowId_][l - 2]
 		k1 := window_keys[ActiveWindowId_][l - 1]
 		Drop_()
@@ -524,7 +524,7 @@ func main() {
 
 	// Must wait for DE to be started. Otherwise, DE sees stupid keyboard and unmaps my rigth alt|win at all!
 	if now.Sub(stat.ModTime()) < (10 * time.Second) {
-		time.Sleep(15 * time.Second)
+		time.Sleep(20 * time.Second)
 	}
 
 
