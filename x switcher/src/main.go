@@ -1,6 +1,6 @@
 package main
 /*
- xswitcher v0.5
+ xswitcher v0.6
 /////////////////////////////////////////////////////////////////////////////
  Copyright (C) 2020 Dmitry Svyatogorov ds@vo-ix.ru
     This program is free software: you can redistribute it and/or modify
@@ -28,6 +28,8 @@ package main
     But it's also the only way to e.g. pass through VNC connections.
 
   In 0.5, dirty patch for XGetClassHint() was implemented to deal with GTK "windows".
+  In 0.6, executable respawns itself at start. To fight against currently implemented "keybd_event" imperfection.
+    Also, long pressing of ScrollLock respawns too. "Just in case."
 
   Still PoC with hardcoded settings, but less buggy.
 
@@ -57,6 +59,7 @@ import (
 	"encoding/binary"
 	"fmt"
 //	"io/ioutil"
+	"path/filepath"
 	"os"
 	"regexp"
 	"syscall"
@@ -125,6 +128,37 @@ var (
 	BYPASS = regexp.MustCompile(`^VirtualBox`)
 	bypass = false
 )
+
+
+// https://gravitational.com/blog/golang-ssh-bastion-graceful-restarts/
+func forkChild() (*os.Process, error) {
+	// Pass stdin, stdout, and stderr to the child.
+	files := []*os.File{
+		os.Stdin,
+		os.Stdout,
+		os.Stderr,
+	}
+
+	// Get current process name and directory.
+	execName, err := os.Executable()
+	if err != nil {
+		return nil, err
+	}
+	execDir := filepath.Dir(execName)
+
+	// Spawn child process.
+	p, err := os.StartProcess(execName, []string{execName}, &os.ProcAttr{
+		Dir:   execDir,
+		Env:   os.Environ(),
+		Files: files,
+		Sys:   &syscall.SysProcAttr{},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return p, nil
+}
 
 
 // There must be 1 buffer per each X-window.
@@ -260,7 +294,7 @@ func CtrlSequence() (bool) { // CTRL + some_key
 	return false
 }
 
-func RepeatSequence() (bool) { // ...val=2, val=0
+func RepeatedSequence() (bool) { // ...val=2, val=0
 	l := len(window_keys[ActiveWindowId_])
 	if l < 2 { return false	}
 
@@ -275,6 +309,7 @@ func RepeatSequence() (bool) { // ...val=2, val=0
 	}
 	return false
 }
+
 
 
 func SpaceSequence() (bool) { // some_key after space
@@ -298,6 +333,7 @@ func SpaceSequence() (bool) { // some_key after space
 }
 
 
+
 func Drop_() {
 	window_keys[ActiveWindowId_] = nil
 
@@ -316,6 +352,20 @@ func Drop() {
 	return
 }
 
+
+func Respawn() { // Completelly respawn xswitcher.
+	p, err := forkChild()
+	if err != nil {
+		fmt.Printf("Unable to fork child: %v.\n", err)
+		return
+	}
+	fmt.Printf("Forked child %v.\n", p.Pid)
+	os.Exit(0)
+
+// Create a context that will expire in 5 seconds and use this as a timeout to Shutdown.
+//		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+//		defer cancel()
+}
 
 func Add(event t_key) {
     ActiveWindowId()
@@ -344,7 +394,11 @@ func Add(event t_key) {
 		return
 	}
 
-	if CtrlSequence() || RepeatSequence() {
+	if CtrlSequence() || RepeatedSequence() {
+		if window_keys[ActiveWindowId_][l - 1].code == evdev.KEY_SCROLLLOCK { // Reload myself
+			Respawn()
+		}
+
 		Drop_()
 		return
 	}
@@ -522,9 +576,12 @@ func main() {
 	}
 	now := time.Now()
 
-	// Must wait for DE to be started. Otherwise, DE sees stupid keyboard and unmaps my rigth alt|win at all!
+	// Must wait for DE to be started. Otherwise, DE sees stupid keyboard and unmaps my rigth alt|win keys at all!
 	if now.Sub(stat.ModTime()) < (10 * time.Second) {
-		time.Sleep(20 * time.Second)
+	    go func() {
+			time.Sleep(15 * time.Second)
+			Respawn()
+		}()
 	}
 
 
