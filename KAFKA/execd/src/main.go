@@ -59,40 +59,40 @@ package main
 
 import (
 	"bytes"
-    "crypto/sha1"
-//    "crypto/sha512"
-    "crypto/tls"
-    "crypto/x509"
-    "encoding/json"
-    "encoding/pem"
-//    "encoding/base64"
+	"crypto/sha1"
+//	"crypto/sha512"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/json"
+	"encoding/pem"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"github.com/BurntSushi/toml"		// TOML
-    "github.com/Showmax/go-fqdn"        // Simple wrapper around net and os golang standard libraries providing Fully Qualified Domain Name
-//    "github.com/samuel/go-zookeeper/zk" // zookeeper
-    // https://github.com/Shopify/sarama/wiki/Frequently-Asked-Questions
+	"github.com/Showmax/go-fqdn"        // Simple wrapper around net and os golang standard libraries providing Fully Qualified Domain Name
+//	"github.com/samuel/go-zookeeper/zk" // zookeeper
+	// https://github.com/Shopify/sarama/wiki/Frequently-Asked-Questions
 	"github.com/Shopify/sarama"         // kafka
 //	flag "github.com/juju/gnuflag"
 	flag "github.com/spf13/pflag"       // CLI keys like python's "argparse". More flexible, comparing with "gnuflag"
-    "github.com/juju/mutex"             // Interprocess mutex
-    "io"
+	"github.com/juju/mutex"             // Interprocess mutex
+	"io"
 	"io/ioutil"
-    "log"
+	"log"
 	"log/syslog"
 	"net"
 	"os"
-    "os/exec"
-    "os/user"
+	"os/exec"
+	"os/user"
 	"os/signal"
-    "regexp"
+	"regexp"
 	// https://medium.com/samsara-engineering/running-go-on-low-memory-devices-536e1ca2fe8f
-    "runtime/debug" // func FreeOSMemory()
+	"runtime/debug" // func FreeOSMemory()
 	"strconv"
 	"strings"
-    "syscall"
+	"syscall"
 	"sync"
-    "time"
+	"time"
 //	"reflect"
 )
 
@@ -113,15 +113,15 @@ type Kafka struct {
 	ReadTimeout int
 	WriteTimeout int
 	KeepAlive int
-    LocalAddr string // https://godoc.org/net#Addr
+	LocalAddr string // https://godoc.org/net#Addr
 }
 type Consume struct {
 	Topics []string
 	Partition int32
 	LocalDirectory string
-    FetchMax int32
-    RetryBackoff int
-    RetryMax int
+	FetchMax int32
+	RetryBackoff int
+	RetryMax int
 }
 type Produce struct {
 	Topic string
@@ -136,7 +136,7 @@ type Hooks struct {
 	Start string
 	Stop string
 	Produce bool
-    Tag string
+	Tag string
 }
 type Config struct {
 	ZooKeeper ZooKeeper  // ZooKeeper connection settings
@@ -153,7 +153,7 @@ type Config struct {
 
 // Command execution result
 type ExecResult struct {
-    ID string             `json:"id"`
+	ID string             `json:"id"`
 	Processed bool        `json:"processed"` // Was this command ever been processed?
 	Command string        `json:"command"`
 	Args []string         `json:"args"`
@@ -181,6 +181,7 @@ type Command struct {
 	set_dir string
 	command string
 	args []string
+	stdin []byte
 }
 
 // Default values for []Command array
@@ -197,7 +198,7 @@ type Defaults struct {
 }
 
 type Commands struct {
-    producer string    // ClientID of producer
+	producer string    // ClientID of producer
 	uuid string        // UUID for reporting
 	host_regex string  // Is this message intended for localhost?
 	tag string         // Some tag can be set, to facilitate further analysis.
@@ -208,40 +209,40 @@ type Commands struct {
 
 var (
 	MUTEX mutex.Releaser
-    CONF *Config
-    OFFSETS = make(map [string]int64)
-    OFFSETS_ON_START = make(map [string]int64)        // Last offsets in journal
-    OFFSETS_ON_START_OLDEST = make(map [string]int64) // First offsets in journal
-    PRODUCER sarama.SyncProducer
+	CONF *Config
+	OFFSETS = make(map [string]int64)
+	OFFSETS_ON_START = make(map [string]int64)        // Last offsets in journal
+	OFFSETS_ON_START_OLDEST = make(map [string]int64) // First offsets in journal
+	PRODUCER sarama.SyncProducer
 
-    CAcert []byte
-    privateKey []byte
-    cert []byte
+	CAcert []byte
+	privateKey []byte
+	cert []byte
 
 	hookStart bool
 	hookStop bool
-    exitSignal os.Signal // Report exit cause (except of SIGKILL)
+	exitSignal os.Signal // Report exit cause (except of SIGKILL)
 
 	// Syslog logger
 	SYSLOG *syslog.Writer
 	STDOUT *log.Logger
 	STDERR *log.Logger
 
-    DEBUG *bool
+	DEBUG *bool
 	// https://unix.superglobalmegacorp.com/Net2/newsrc/sys/syslog.h.html
-    LOG_LEVEL syslog.Priority // LOG_EMERG=0 .. LOG_DEBUG=7
+	LOG_LEVEL syslog.Priority // LOG_EMERG=0 .. LOG_DEBUG=7
 )
 
 
 // void: Log to syslog/stdout/stderr, depending on settings
 func LOG(severity syslog.Priority, message_ ...interface{}) {
-    if severity > LOG_LEVEL { return }
+	if severity > LOG_LEVEL { return }
 //    message := (strings.Trim(fmt.Sprint(message_...), "[]"))
 	message := fmt.Sprint(message_...)
 	message = message[1:]
 	message = message[:(len(message)-1)]
 
-    var err error
+	var err error
 	level := "DEBUG"
 	switch severity {
 		case syslog.LOG_EMERG:
@@ -308,21 +309,23 @@ func execCommand(c *Command) (*ExecResult) {
 					Command: c.command,
 					Args: c.args}
 	cmd := exec.Command(c.command)
-    if c.use_shell { // Pack into bash environment (In fact, bash is *sh's mainstream. And I unwill to deep into specifics)
+	if c.use_shell { // Pack into bash environment (In fact, bash is *sh's mainstream. And I unwill to deep into specifics)
 		cmd = exec.Command("/bin/bash")
 		// -c If the -c option is present, then commands are read from the first non-option argument command_string.  If there are arguments after the command_string, the first argu-
 		//    ment is assigned to $0 and any remaining arguments are assigned to the positional parameters.  The assignment to $0 sets the name of the shell, which is used in warning
 		//    and error messages.
-        cmd.Args = append(cmd.Args, "-c")
-        cmd.Args = append(cmd.Args, c.command)
+		cmd.Args = append(cmd.Args, "-c")
+		cmd.Args = append(cmd.Args, c.command)
 	}
 	// https://medium.com/@felixge/killing-a-child-process-and-all-of-its-children-in-go-54079af94773
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	cmd.Args = append(cmd.Args, c.args...)
-    // https://stackoverflow.com/questions/21705950/running-external-commands-through-os-exec-under-another-user
+	cmd.Stdin = bytes.NewReader(c.stdin)
+
+	// https://stackoverflow.com/questions/21705950/running-external-commands-through-os-exec-under-another-user
 	if c.uid > 0 {
-    	cmd.SysProcAttr = &syscall.SysProcAttr{}
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
 		cmd.SysProcAttr.Credential = &syscall.Credential{Uid: c.uid, Gid: c.gid}
 	}
 	if len(c.set_dir) > 0 {
@@ -335,10 +338,10 @@ func execCommand(c *Command) (*ExecResult) {
 	// http://www.agardner.me/golang/garbage/collection/gc/escape/analysis/2015/10/18/go-escape-analysis.html
 	// https://habr.com/ru/company/intel/blog/422447/
 	var _stdout, _stderr     bytes.Buffer
-    var stdoutIn, stderrIn   io.ReadCloser
-    var errStdout, errStderr error
+	var stdoutIn, stderrIn   io.ReadCloser
+	var errStdout, errStderr error
 
-    stdout := io.Writer(&_stdout)
+	stdout := io.Writer(&_stdout)
 	stderr := io.Writer(&_stderr)
   	if ! c.no_wait { // Otherwise, just fork process with /dev/null at stdout&stderr.
 		stdoutIn, _ = cmd.StdoutPipe()
@@ -354,14 +357,14 @@ func execCommand(c *Command) (*ExecResult) {
 	err := cmd.Start()
 	r.Processed = true
 	if err != nil {
-        r.StdErr= []byte(err.Error())
+		r.StdErr= []byte(err.Error())
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			if _status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
 				r.Status = _status.ExitStatus()
-	        }
-    	} else {
-    		r.Status = -1 // No such command at all?
-	    }
+			}
+		} else {
+			r.Status = -1 // No such command at all?
+		}
 
 	}
 //	fmt.Printf("pid = %d\n", cmd.Process.Pid)
@@ -382,14 +385,14 @@ func execCommand(c *Command) (*ExecResult) {
 		if cmd.ProcessState == nil {
 //			cmd.Process.Signal(syscall.SIGTERM) // No, such a method terminates only this PID, leaving orphans!
 			syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
-            time.Sleep(time.Second / 2)
+			time.Sleep(time.Second / 2)
 			syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		}
 	} ()
 
 	// https://blog.kowalczyk.info/article/wOYk/advanced-command-execution-in-go-with-osexec.html
 	var wg sync.WaitGroup
-    wg.Add(1)
+	wg.Add(1)
 	go func() {
 		_, errStdout = io.CopyN(stdout, stdoutIn, c.max_reply)
 		if errStdout == io.EOF {
@@ -407,26 +410,26 @@ func execCommand(c *Command) (*ExecResult) {
 	}
 	wg.Wait()
 
-    err = cmd.Wait()
+	err = cmd.Wait()
 	if err != nil {
-        r.StdErr = []byte(err.Error())
+		r.StdErr = []byte(err.Error())
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			if _status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
 				r.Status = _status.ExitStatus()
-	        }
-    	} else {
-    		r.Status = -1 // No such command at all?
-	    }
+			}
+		} else {
+			r.Status = -1 // No such command at all?
+		}
 
 	}
 
 	if errStdout != nil {
 		r.StdOut = []byte(errStdout.Error())
-        r.Status = -254
+		r.Status = -254
 	}
 	if errStderr != nil {
 		r.StdErr = []byte(errStderr.Error())
-        r.Status = -255
+		r.Status = -255
 	}
 
 	r.StdOut = _stdout.Bytes()
@@ -466,9 +469,9 @@ func jsonCommand(msg []byte, DEFAULTS Defaults, seq int) (COMMAND *Command, ERRO
 			case float64:
 				id, _ := value.(float64)
 				if id == float64(int(id)) { // Is it integer?
-                	cmd.id = fmt.Sprintf("%d", int(id))
+					cmd.id = fmt.Sprintf("%d", int(id))
 				} else {
-                	cmd.id = fmt.Sprintf("%f", id)
+					cmd.id = fmt.Sprintf("%f", id)
 				}
 			default:
 				return nil, fmt.Sprintf("\"id\" field isn't [string|number], but [%T]", t)
@@ -597,6 +600,24 @@ func jsonCommand(msg []byte, DEFAULTS Defaults, seq int) (COMMAND *Command, ERRO
 			default:
 				return nil, fmt.Sprintf("\"command\" field isn't [string], but [%T]", t)
 			} // switch t
+		case "stdin":
+			switch t := value.(type) {
+			case string:
+				cmd.stdin = []byte(value.(string))
+			default:
+				return nil, fmt.Sprintf("\"stdin\" field isn't [string], but [%T]", t)
+			} // switch t
+		case "stdin_64":
+			switch t := value.(type) {
+			case string:
+				stdin, err := base64.StdEncoding.DecodeString(value.(string)) // []byte
+				if err != nil {
+					return nil, fmt.Sprintf("\"stdin_64\" field isn't [base64-encoded string]: %s", err.Error())
+				}
+				cmd.stdin = stdin
+			default:
+				return nil, fmt.Sprintf("\"stdin_64\" field isn't [string], but [%T]", t)
+			} // switch t
 
 		case "args":
 			switch t := value.(type) {
@@ -651,7 +672,7 @@ func jsonMessage(msg []byte) (COMMANDS *Commands, ERROR string) {
 			case string:
 				cmd.producer = value.(string)
 			case float64:
-               	cmd.producer = fmt.Sprintf("%f", value.(float64))
+			   	cmd.producer = fmt.Sprintf("%f", value.(float64))
 			default:
 				return nil, fmt.Sprintf("\"producer\" field isn't [string], but [%T]", t)
 			} // switch t
@@ -663,7 +684,7 @@ func jsonMessage(msg []byte) (COMMANDS *Commands, ERROR string) {
 			case string:
 				cmd.uuid = value.(string)
 			case float64:
-               	cmd.uuid = fmt.Sprintf("%f", value.(float64))
+			   	cmd.uuid = fmt.Sprintf("%f", value.(float64))
 			default:
 				return nil, fmt.Sprintf("\"uuid\" field isn't [string], but [%T]", t)
 			} // switch t
@@ -850,7 +871,7 @@ func zooWrite(path []string, value []byte) (ERROR string) {
 
 	for _, p := range path {
 		_path = _path + "/" + p
-        fmt.Println("Path =" + _path)
+		fmt.Println("Path =" + _path)
 		exists, _, err = c.Exists(_path)
 		if err != nil {
 			return fmt.Sprintf("ZOO error checking path: %s", err.Error())
@@ -874,11 +895,11 @@ func zooWrite(path []string, value []byte) (ERROR string) {
 
 // Void commitOffset() must panic on error, avoiding inconsistency
 func commitOffset(topic string, offset int64) () {
-    OFFSETS[topic] = offset  // Update local offsets map. E.g. to check HookStart.
+	OFFSETS[topic] = offset  // Update local offsets map. E.g. to check HookStart.
 
-    if err := os.Rename(CONF.Consume.LocalDirectory + topic + ".offset", CONF.Consume.LocalDirectory + topic + ".offset.old"); err != nil {
+	if err := os.Rename(CONF.Consume.LocalDirectory + topic + ".offset", CONF.Consume.LocalDirectory + topic + ".offset.old"); err != nil {
 		panic(fmt.Errorf("Commit error: Error renaming old offset to \"offset.old\": %s", err.Error()))
-    }
+	}
 
 	f, err := os.OpenFile(CONF.Consume.LocalDirectory + topic + ".offset", os.O_RDWR|os.O_CREATE, 0600)
 	if err != nil {
@@ -906,7 +927,7 @@ func consume(topics []string, master sarama.Consumer) (chan *sarama.ConsumerMess
 		}
 		partitions, _ := master.Partitions(topic)
 		// this only consumes partition #1, you would probably want to consume all partitions
-        commitOffset(topic, OFFSETS[topic])
+		commitOffset(topic, OFFSETS[topic])
 		consumer, err := master.ConsumePartition(topic, CONF.Consume.Partition, OFFSETS[topic]) // sarama.OffsetOldest
 		if err != nil {
 			panic(fmt.Errorf("Consume error: unable to consume topic \"%s\"%s: %s", topic, partitions, err.Error()))
@@ -936,16 +957,16 @@ func consume(topics []string, master sarama.Consumer) (chan *sarama.ConsumerMess
 func produceExecReport(COMMANDS *Commands, RESULTS *ExecResults, message *sarama.ConsumerMessage, errorText string) {
 	// https://golang.org/ref/spec#Exported_identifiers
 	type Report struct {
-	    ClientID string       `json:"client_id"`
-	    MSG string            `json:"msg"`
+		ClientID string       `json:"client_id"`
+		MSG string            `json:"msg"`
 		ERROR string          `json:"error,omitempty"`
 		UUID string           `json:"uuid,omitempty"`
 		TAG string            `json:"tag,omitempty"`
 		PRODUCER string       `json:"producer,omitempty"`
 		RESULTS []*ExecResult `json:"exec,omitempty"`
-        TimeStamp string      `json:"timestamp,omitempty"`
+		TimeStamp string      `json:"timestamp,omitempty"`
 	}
-    t := time.Now()
+	t := time.Now()
 	report := Report{ClientID: CONF.Kafka.ClientID,
 					MSG: fmt.Sprintf("[%s](%d):%d", message.Topic, message.Partition, message.Offset),
 					ERROR: errorText,
@@ -974,10 +995,10 @@ func produceExecReport(COMMANDS *Commands, RESULTS *ExecResults, message *sarama
 	partition, offset, err := PRODUCER.SendMessage(msg)
 	if err != nil {
 		// Try to leave local copy of last report before aborting
-        report_file := fmt.Sprintf("%s/%s:%d:%d.crash", CONF.Consume.LocalDirectory, message.Topic,  message.Partition, message.Offset)
+		report_file := fmt.Sprintf("%s/%s:%d:%d.crash", CONF.Consume.LocalDirectory, message.Topic,  message.Partition, message.Offset)
 		if f, err := os.OpenFile(report_file, os.O_RDWR|os.O_CREATE, 0600); err == nil {
 			defer f.Close()
-            f.Write(report_)
+			f.Write(report_)
 		}
 		panic(fmt.Errorf("Produce error: unable to send report: %s", err.Error()))
 	} else {
@@ -986,11 +1007,11 @@ func produceExecReport(COMMANDS *Commands, RESULTS *ExecResults, message *sarama
 
 	if len(CONF.Produce.LocalDirectory) > 0 {
 		report_path := fmt.Sprintf("%s/%s/%d/", CONF.Produce.LocalDirectory, msg.Topic, partition)
-	    if err = os.MkdirAll(report_path, 0700); err != nil {
+		if err = os.MkdirAll(report_path, 0700); err != nil {
 			panic(fmt.Errorf("Produce error: unable to create local report path \"%s\": %s", report_path, err.Error()))
 		}
 
-        report_file := fmt.Sprintf("%s/%d", report_path, offset)
+		report_file := fmt.Sprintf("%s/%d", report_path, offset)
 		f, err := os.OpenFile(report_file, os.O_RDWR|os.O_CREATE, 0600)
 	 	if err != nil {
  			panic(fmt.Errorf("Produce error: unable to open report file \"%s\": %s", report_file, err.Error()))
@@ -1007,32 +1028,32 @@ func produceExecReport(COMMANDS *Commands, RESULTS *ExecResults, message *sarama
 
 // Void ProcessMessage() for messages received from kafka
 func processMessage(msg *sarama.ConsumerMessage) { // https://godoc.org/github.com/Shopify/sarama#ConsumerMessage
-    fqdn := fqdn.Get()
+	fqdn := fqdn.Get()
 	defer commitOffset(msg.Topic, msg.Offset + 1) // Offset must be incremented only after processMessage()
 
 	RESULTS := &ExecResults{}
-    COMMANDS, ERR := jsonMessage(msg.Value)
-    if ERR != "" { // Bad message format
+	COMMANDS, ERR := jsonMessage(msg.Value)
+	if ERR != "" { // Bad message format
 //		fmt.Println("Error in message: ", msg.Offset, ERR)
 		produceExecReport(COMMANDS, RESULTS, msg, "Error parsing json")
 		return
-    }
-    if COMMANDS.host_regex != "" { // Execute only those are matching hostname
-        matched, err := regexp.MatchString(COMMANDS.host_regex, fqdn)
-    	if err != nil { // Invalid regexp syntax
+	}
+	if COMMANDS.host_regex != "" { // Execute only those are matching hostname
+		matched, err := regexp.MatchString(COMMANDS.host_regex, fqdn)
+		if err != nil { // Invalid regexp syntax
 //!!!			produceCommandError("Invalid regexp", COMMANDS)
 			produceExecReport(COMMANDS, RESULTS, msg, "Invalid regexp: " + COMMANDS.host_regex)
 			return
-    	}
-    	if !matched { // This command is not intended for this host
-    		return
-    	}
-    }
+		}
+		if !matched { // This command is not intended for this host
+			return
+		}
+	}
 
 	defer produceExecReport(COMMANDS, RESULTS, msg, "")
 
 	for i, _ := range COMMANDS.commands {
-	    if COMMANDS.commands[i].host_regex != "" { // Execute only those are matching hostname
+		if COMMANDS.commands[i].host_regex != "" { // Execute only those are matching hostname
 				matched, err := regexp.MatchString(COMMANDS.commands[i].host_regex, fqdn)
 			if err != nil { // Invalid regexp syntax
 				continue
@@ -1057,7 +1078,7 @@ func processMessage(msg *sarama.ConsumerMessage) { // https://godoc.org/github.c
 // Process hooks
 // Coommon executer
 func doHook(hook string, id string) {
-    cmd := &Command {
+	cmd := &Command {
 		id: "hook",
 		use_shell: true,
 		timeout: 900,
@@ -1081,13 +1102,13 @@ func doHook(hook string, id string) {
 						producer: CONF.Kafka.ClientID,
 						uuid: id,
 						tag: CONF.Hooks.Tag,
-                        commands: []Command{*cmd},
+						commands: []Command{*cmd},
 						}
 		err := ""
 		if exitSignal != nil {
 			err = fmt.Sprintf("Exiting on signal: %s", exitSignal)
 		}
-	    logNotice("CONF.Hooks.Produce: sending report...")
+		logNotice("CONF.Hooks.Produce: sending report...")
 		produceExecReport(COMMANDS, RESULTS, msg, err)
 	}
 
@@ -1100,7 +1121,7 @@ func doHook(hook string, id string) {
 func doHookStart() {
 // When journal is empty, (OFFSETS_ON_START[topic] == OFFSETS_ON_START_OLDEST[topic])
 	for topic, _ := range OFFSETS_ON_START {
-	    logDebug(topic, ":", OFFSETS[topic], OFFSETS_ON_START[topic])
+		logDebug(topic, ":", OFFSETS[topic], OFFSETS_ON_START[topic])
 		if (OFFSETS[topic] == sarama.OffsetOldest) && (OFFSETS_ON_START[topic] > OFFSETS_ON_START_OLDEST[topic]) {
 			continue
 		}
@@ -1116,21 +1137,21 @@ func doHookStart() {
 		return
 	}
 
-    logWarning("CONF.Hooks.Start: launching hook:", CONF.Hooks.Start)
-    hookStart = false
+	logWarning("CONF.Hooks.Start: launching hook:", CONF.Hooks.Start)
+	hookStart = false
 
 	doHook(CONF.Hooks.Start, "Local.Hooks.Start")
-    logNotice("CONF.Hooks.Start: done")
+	logNotice("CONF.Hooks.Start: done")
 	return
 }
 
 // Hooks.Stop
 func doHookStop() {
-    logWarning("CONF.Hooks.Stop: launching hook:", CONF.Hooks.Stop)
-    hookStop = false
+	logWarning("CONF.Hooks.Stop: launching hook:", CONF.Hooks.Stop)
+	hookStop = false
 
 	doHook(CONF.Hooks.Stop, "Local.Hooks.Stop")
-    logNotice("CONF.Hooks.Stop: done")
+	logNotice("CONF.Hooks.Stop: done")
 	return
 }
 
@@ -1138,8 +1159,8 @@ func doHookStop() {
 // Parse given config. Panic on errors: config MUST be clear for such a daemon.
 // !!! "--test" CLI key must be realized to check syntax before daemon reloading.
 func parseConfigFile() (*Config) {
-    config_path_ := "/etc/execd/execd.conf"
-    config_path := &config_path_
+	config_path_ := "/etc/execd/execd.conf"
+	config_path := &config_path_
 
 	conf := &Config{}
 	// Defaults
@@ -1161,11 +1182,11 @@ func parseConfigFile() (*Config) {
 		*config_path = env_config
 	}
 
-    F := flag.NewFlagSet("", flag.ContinueOnError)
-    config_path = F.StringP("conf", "c", *config_path, "Non-default config location")
-    DEBUG = F.BoolP("debug", "d", *DEBUG, "Debug log level (although switches output to stdout|stderr)")
-    verbose := F.BoolP("verbose", "v", false, "Increase log level to NOTICE")
-    F.StringP("uninitialized.topic.name", "", "", "Note, that \"--topic=offset\" keys have to be provided only once, at initialization phase")
+	F := flag.NewFlagSet("", flag.ContinueOnError)
+	config_path = F.StringP("conf", "c", *config_path, "Non-default config location")
+	DEBUG = F.BoolP("debug", "d", *DEBUG, "Debug log level (although switches output to stdout|stderr)")
+	verbose := F.BoolP("verbose", "v", false, "Increase log level to NOTICE")
+	F.StringP("uninitialized.topic.name", "", "", "Note, that \"--topic=offset\" keys have to be provided only once, at initialization phase")
 	if err := F.Parse(os.Args[1:]); err != nil {
 		logErr(err.Error())
 	}
@@ -1197,27 +1218,27 @@ func parseConfigFile() (*Config) {
 		conf.Kafka.ClientID = fqdn.Get()
 	}
 
-    if len(conf.Kafka.CAcertFile) > 0 {
-	    CAcert, err = ioutil.ReadFile(conf.Kafka.CAcertFile)
+	if len(conf.Kafka.CAcertFile) > 0 {
+		CAcert, err = ioutil.ReadFile(conf.Kafka.CAcertFile)
 		if err != nil {
 			panic(fmt.Errorf("Config error: unable to read Kafka.CAcertFile: %s", err.Error()))
 		}
-        keyBlock, _ := pem.Decode(CAcert)
-        if keyBlock == nil {
+		keyBlock, _ := pem.Decode(CAcert)
+		if keyBlock == nil {
 			panic(fmt.Errorf("Config error: invalid PEM inside Kafka.CAcertFile = \"%s\"", conf.Kafka.CAcertFile))
-        }
+		}
 	}
 
-    if len(conf.Kafka.PrivateKeyFile) > 0 {
-	    privateKey, err = ioutil.ReadFile(conf.Kafka.PrivateKeyFile)
+	if len(conf.Kafka.PrivateKeyFile) > 0 {
+		privateKey, err = ioutil.ReadFile(conf.Kafka.PrivateKeyFile)
 		if err != nil {
 			panic(fmt.Errorf("Config error: unable to read Kafka.PrivateKeyFile: %s", err.Error()))
 		}
 		// https://stackoverflow.com/a/56131169
-        keyBlock, _ := pem.Decode(privateKey)
-        if keyBlock == nil {
+		keyBlock, _ := pem.Decode(privateKey)
+		if keyBlock == nil {
 			panic(fmt.Errorf("Config error: invalid PEM inside Kafka.PrivateKeyFile = \"%s\"", conf.Kafka.PrivateKeyFile))
-        }
+		}
 		switch keyBlock.Type {
 		case "ENCRYPTED PRIVATE KEY":
 /* openssl default is PKCS8 pbeWITHMD5ndDES-CBC, while https://godoc.org/github.com/youmark/pkcs8 has AES-256-CBC only
@@ -1225,31 +1246,31 @@ func parseConfigFile() (*Config) {
 			// Decrypt key
 				keyDER, err := x509.DecryptPEMBlock(keyBlock, []byte(conf.Kafka.PrivateKeyPassword + "xxx"))
 				if err != nil {
-			        panic(fmt.Errorf("Config error: unable to decrypt key from Kafka.PrivateKeyFile: %s", err.Error()))
+					panic(fmt.Errorf("Config error: unable to decrypt key from Kafka.PrivateKeyFile: %s", err.Error()))
 				}
 				// Update keyBlock with the plaintext bytes and clear the now obsolete headers.
 				keyBlock.Bytes = keyDER
 				keyBlock.Headers = nil
-	        panic(fmt.Errorf("XXX Config error: invalid key type stored in Kafka.PrivateKeyFile: \"%s\"", keyBlock.Type))
+			panic(fmt.Errorf("XXX Config error: invalid key type stored in Kafka.PrivateKeyFile: \"%s\"", keyBlock.Type))
 			}
-            privateKey = pem.EncodeToMemory(keyBlock)
+			privateKey = pem.EncodeToMemory(keyBlock)
 */
-	        panic(fmt.Errorf("Config error: ENCRYPTED PRIVATE KEY is unsupported now. Kafka.PrivateKeyFile: \"%s\"", keyBlock.Type))
+			panic(fmt.Errorf("Config error: ENCRYPTED PRIVATE KEY is unsupported now. Kafka.PrivateKeyFile: \"%s\"", keyBlock.Type))
 		case "PRIVATE KEY":
-            privateKey = pem.EncodeToMemory(keyBlock)
+			privateKey = pem.EncodeToMemory(keyBlock)
 		default:
-	        panic(fmt.Errorf("Config error: invalid key type stored in Kafka.PrivateKeyFile: \"%s\"", keyBlock.Type))
+			panic(fmt.Errorf("Config error: invalid key type stored in Kafka.PrivateKeyFile: \"%s\"", keyBlock.Type))
 		}
 
-	    if len(conf.Kafka.CertFile) > 0 {
-		    cert, err = ioutil.ReadFile(conf.Kafka.CertFile)
+		if len(conf.Kafka.CertFile) > 0 {
+			cert, err = ioutil.ReadFile(conf.Kafka.CertFile)
 			if err != nil {
 				panic(fmt.Errorf("Config error: unable to read Kafka.CertFile: %s", err.Error()))
 			}
-	        keyBlock, _ := pem.Decode(cert)
-	        if keyBlock == nil {
+			keyBlock, _ := pem.Decode(cert)
+			if keyBlock == nil {
 				panic(fmt.Errorf("Config error: invalid PEM inside Kafka.CertFile = \"%s\"", conf.Kafka.CertFile))
-        	}
+			}
 		} else {
 			panic(fmt.Errorf("Config error: Kafka.CertFile must be provided in couple with Kafka.PrivateKeyFile"))
 		}
@@ -1259,7 +1280,7 @@ func parseConfigFile() (*Config) {
 	if len(conf.Consume.LocalDirectory) < 1 {
 		panic(fmt.Errorf("Config error: Consume.LocalDirectory must be set"))
 	}
-    if err = os.MkdirAll(conf.Consume.LocalDirectory, 0700); err != nil {
+	if err = os.MkdirAll(conf.Consume.LocalDirectory, 0700); err != nil {
 		panic(fmt.Errorf("Config error: unable to create Consume.LocalDirectory: %s", err.Error()))
 	}
 	if conf.Consume.LocalDirectory[len(conf.Consume.LocalDirectory)-1 :] != "/" {
@@ -1268,7 +1289,7 @@ func parseConfigFile() (*Config) {
 
 	// Test Produce.LocalDirectory is available, if set
 	if len(conf.Produce.LocalDirectory) > 0 {
-	    if err = os.MkdirAll(conf.Produce.LocalDirectory, 0700); err != nil {
+		if err = os.MkdirAll(conf.Produce.LocalDirectory, 0700); err != nil {
 			panic(fmt.Errorf("Config error: unable to create Produce.LocalDirectory: %s", err.Error()))
 		}
 		if conf.Produce.LocalDirectory[len(conf.Produce.LocalDirectory)-1 :] != "/" {
@@ -1345,15 +1366,15 @@ func (f *fakeClock) Now() time.Time {
 }
 func mutEx () {
 
-    var err = errors.New("")
-    hash := fmt.Sprintf("%x", sha1.Sum([]byte(os.Args[0])))
-    hash = "X" + hash[1:]
-    logDebug("Init: acquiring global IPC mutex. ID = " + hash)
+	var err = errors.New("")
+	hash := fmt.Sprintf("%x", sha1.Sum([]byte(os.Args[0])))
+	hash = "X" + hash[1:]
+	logDebug("Init: acquiring global IPC mutex. ID = " + hash)
 
 	spec := mutex.Spec {Name: hash,
 						Clock: &fakeClock{time.Millisecond},
-                        Delay: time.Millisecond,
-                        Timeout: time.Second,
+						Delay: time.Millisecond,
+						Timeout: time.Second,
 						}
 	if MUTEX, err = mutex.Acquire(spec); err != nil {
 		panic(fmt.Errorf("Mutex error: another instance is already running: %s", err.Error()))
@@ -1363,8 +1384,8 @@ func mutEx () {
 
 
 func main() {
-    FALSE := false
-    DEBUG = &FALSE
+	FALSE := false
+	DEBUG = &FALSE
 
 	err := errors.New("")
 
@@ -1407,12 +1428,12 @@ func main() {
 	CONF = parseConfigFile()
 /*/////////////////////////////////////////////////////////
 // zookeeper test
-    m := []byte("test\nvalue")
+	m := []byte("test\nvalue")
 	zooWrite([]string{"knot1","test"}, m)
   /////////////////////////////////////////////////////////
 */
 
-    // KAFKA
+	// KAFKA
 	if *DEBUG { // Log sarama output
 		l := log.New(os.Stdout, "kafka: ", log.LstdFlags)
 		sarama.Logger = l
@@ -1429,23 +1450,23 @@ func main() {
 	config.Version = sarama.V2_2_0_0 // https://github.com/Shopify/sarama/blob/master/utils.go
 	config.ClientID = CONF.Kafka.ClientID
 	config.Consumer.Return.Errors = true
-    if CONF.Consume.FetchMax > 0 {
+	if CONF.Consume.FetchMax > 0 {
 		config.Consumer.Fetch.Max = CONF.Consume.FetchMax
 	}
 	config.Consumer.IsolationLevel = sarama.ReadCommitted
-    if CONF.Consume.RetryBackoff > 0 {
+	if CONF.Consume.RetryBackoff > 0 {
 		config.Consumer.Retry.Backoff = time.Second * time.Duration(CONF.Consume.RetryBackoff)
 		config.Metadata.Retry.Backoff = time.Second * time.Duration(CONF.Consume.RetryBackoff)
 	}
 //	config.Consumer.Retry.Max = 86400 >> Metadata  // 86400 == 1 day
 
-    if CONF.Consume.RetryMax > 0 {
+	if CONF.Consume.RetryMax > 0 {
 		config.Metadata.Retry.Max = CONF.Consume.RetryMax
 	}
 // Available in upcoming release.
 //	config.Consumer.ChannelBufferSize = 2 // No need in speedup
 // https://github.com/Shopify/sarama/blob/master/config.go
-    if CONF.Kafka.DialTimeout > 0 {
+	if CONF.Kafka.DialTimeout > 0 {
 		config.Net.DialTimeout = time.Second * time.Duration(CONF.Kafka.DialTimeout)
 	}
 	if CONF.Kafka.ReadTimeout > 0 {
@@ -1462,12 +1483,12 @@ func main() {
 		if a == nil {
 			panic(fmt.Errorf("Init error: invalid ip in CONF.Kafka.LocalAddr: %s", CONF.Kafka.LocalAddr))
 		}
-        addr := &net.TCPAddr{a, 0, ""}
+		addr := &net.TCPAddr{a, 0, ""}
 		config.Net.LocalAddr = addr
 	}
 	config.Net.MaxOpenRequests = 1
 // panic: kafka: client has run out of available brokers to talk to (Is your cluster reachable?)
-    config.Net.TLS.Enable = true
+	config.Net.TLS.Enable = true
 	config.Net.TLS.Config = &tls.Config{InsecureSkipVerify: CONF.Kafka.InsecureSkipVerify}
 	if len(CAcert) > 0 { // Import provided root CA
 		caCertPool := x509.NewCertPool()
@@ -1478,28 +1499,28 @@ func main() {
 		}
 	}
 	if len(privateKey) > 0 { // Import provided client key pair
-	    crt, err := tls.X509KeyPair(cert, privateKey)
-	    if err != nil {
+		crt, err := tls.X509KeyPair(cert, privateKey)
+		if err != nil {
 			panic(fmt.Errorf("Init error: invalid key pair provided in Kafka.(privateKeyFile|certFile): %s", err.Error()))
-	    }
-        config.Net.TLS.Config.Certificates = []tls.Certificate{crt}
+		}
+		config.Net.TLS.Config.Certificates = []tls.Certificate{crt}
 	}
 
-    if CONF.Produce.MaxMessageBytes > 0 {
+	if CONF.Produce.MaxMessageBytes > 0 {
 		config.Producer.MaxMessageBytes = CONF.Produce.MaxMessageBytes
 	}
 // The maximum duration the broker will wait the receipt of the number of RequiredAcks (defaults to 10 seconds).
 // This is only relevant when RequiredAcks is set to WaitForAll or a number > 1
-    if CONF.Produce.Timeout > 0 {
+	if CONF.Produce.Timeout > 0 {
 		config.Producer.Timeout = time.Second * time.Duration(CONF.Produce.Timeout)
 	}
 	config.Producer.RequiredAcks = sarama.WaitForAll
 	config.Producer.Idempotent = true
 	config.Producer.Return.Successes = true
-    if CONF.Produce.RetryBackoff > 0 {
+	if CONF.Produce.RetryBackoff > 0 {
 		config.Producer.Retry.Backoff = time.Second * time.Duration(CONF.Produce.RetryBackoff)
 	}
-    if CONF.Produce.RetryMax > 0 {
+	if CONF.Produce.RetryMax > 0 {
 		config.Producer.Retry.Max = CONF.Produce.RetryMax
 	}
 
@@ -1558,7 +1579,7 @@ func main() {
 		panic(fmt.Errorf("Init error: Error found in topics config! Aborting."))
 	}
 
-    // Create new producer. It is single, *GLOBAL* object
+	// Create new producer. It is single, *GLOBAL* object
 	logInfo("Init: launching kafka producer...")
 	PRODUCER, err = sarama.NewSyncProducerFromClient(client)
 	if err != nil {
