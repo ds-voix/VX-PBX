@@ -1,6 +1,6 @@
 package main
 /*
- xswitcher v0.6
+ xswitcher v0.7
 /////////////////////////////////////////////////////////////////////////////
  Copyright (C) 2020 Dmitry Svyatogorov ds@vo-ix.ru
     This program is free software: you can redistribute it and/or modify
@@ -30,8 +30,10 @@ package main
   In 0.5, dirty patch for XGetClassHint() was implemented to deal with GTK "windows".
   In 0.6, executable respawns itself at start. To fight against currently implemented "keybd_event" imperfection.
     Also, long pressing of ScrollLock respawns too. "Just in case."
+  In 0.7, there was added initial implementation of config file ("xswitcher.conf", TOML-syntax).
+    Scan-codes are translated on start, as declared in "keys.go".
 
-  Still PoC with hardcoded settings, but less buggy.
+  Still PoC with hardcoded settings (a bit less since 0.7).
 
 Referrers:
  https://www.kernel.org/doc/html/latest/input/event-codes.html
@@ -346,9 +348,17 @@ func Drop_() {
 }
 
 
-func Drop() {
+func Drop(event t_key) {
     ActiveWindowId()
 	Drop_()
+	return
+}
+
+
+func TestSeq(event t_key) {
+    ActiveWindowId()
+    if bypass { return }
+//    fmt.Println("test")
 	return
 }
 
@@ -570,6 +580,13 @@ func keyboard(device *evdev.InputDevice) {
 func main() {
 	var err error
 
+    FALSE_D := false
+    DEBUG = &FALSE_D
+
+    FALSE_V := false
+    VERBOSE = &FALSE_V
+	parseConfigFile()
+
 	stat, err := os.Stat(TEST_INPUT)
 	if err != nil {
 		panic(err)
@@ -577,9 +594,9 @@ func main() {
 	now := time.Now()
 
 	// Must wait for DE to be started. Otherwise, DE sees stupid keyboard and unmaps my rigth alt|win keys at all!
-	if now.Sub(stat.ModTime()) < (10 * time.Second) {
+	if now.Sub(stat.ModTime()) < (45 * time.Second) {
 	    go func() {
-			time.Sleep(15 * time.Second)
+			time.Sleep((45 * time.Second) - now.Sub(stat.ModTime()))
 			Respawn()
 		}()
 	}
@@ -636,73 +653,16 @@ func main() {
 		panic(err)
 	}
 
-
     var event t_key
 	for {
 		select {
 		case event = <- miceEvents: // code is always 0x4, while value is 0x90000 + button(1,2,3...)
-				Drop()
+				Drop(event)
 				continue
 		case event = <- keyboardEvents:
 		}
 
-		switch key := event.code; {
-			case key == evdev.KEY_BREAK || key == evdev.KEY_PAUSE:
-				Add(event)
-			case key < evdev.KEY_1: // drop
-				Drop()
-			case key == evdev.KEY_MINUS: // drop
-				Drop()
-			case key < evdev.KEY_BACKSPACE: // pass
-				Add(event)
-			case key == evdev.KEY_BACKSPACE: // pass !!! but don't count as char
-				Add(event)
-			case key < evdev.KEY_Q: // drop
-				Drop()
-			case key < evdev.KEY_ENTER: // pass
-				Add(event)
-			case key < evdev.KEY_LEFTCTRL: // drop
-				Drop()
-			case key == evdev.KEY_LEFTCTRL: // CTRL
-				Add(event)
-			case key <= evdev.KEY_LEFTSHIFT: // pass
-				Add(event)
-			case key <= evdev.KEY_RIGHTSHIFT: // pass
-				Add(event)
-			case key == evdev.KEY_KPASTERISK: // pass keypad
-				Add(event)
-			case key == evdev.KEY_LEFTALT: // CTRL
-				Add(event)
-			case key == evdev.KEY_SPACE: // pass
-				Add(event)
-			case key == evdev.KEY_CAPSLOCK: // pass
-				Add(event)
-			case key <= evdev.KEY_F10: // F1..F10 ignore
-			case key == evdev.KEY_F11: // F11 ignore
-			case key == evdev.KEY_F12: // F12 ignore
-			case key <= evdev.KEY_SCROLLLOCK: // pass
-				Add(event)
-			case key < evdev.KEY_ZENKAKUHANKAKU: // pass keypad
-				Add(event)
-			case key == evdev.KEY_KPCOMMA: // pass keypad
-				Add(event)
-			case key == evdev.KEY_KPLEFTPAREN: // pass keypad
-				Add(event)
-			case key == evdev.KEY_KPRIGHTPAREN: // pass keypad
-				Add(event)
-			case key == evdev.KEY_RIGHTCTRL: // CTRL
-				Add(event)
-			case key == evdev.KEY_KPSLASH: // pass
-				Add(event)
-			case key == evdev.KEY_RIGHTALT: // CTRL
-				Add(event)
-			case key == evdev.KEY_LEFTMETA: // ???
-				Add(event)
-			case key == evdev.KEY_RIGHTMETA: // ???
-				Add(event)
-			default: // drop
-				Drop()
-		}
+		ACTIONS[event.code](event)
 	}
     os.Exit(0)
 
