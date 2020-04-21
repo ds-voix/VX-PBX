@@ -46,7 +46,7 @@ var (
 func parseKeys(keys []string, action actionFunc, errMsg string) {
 	for _, key := range keys {
 		if k, ok := key_def[key]; ok {
-			ACTIONS[k] = add
+			ACTIONS[k] = action
 		} else {
 			if KEY_RANGE.MatchString(key) {
 				k1 := uint(0)
@@ -130,7 +130,7 @@ func parseConfigFile() {
 			case key == evdev.KEY_RIGHTMETA: // ???
 				ACTIONS[i] = add
 			default: // test
-				ACTIONS[i] = test
+				ACTIONS[i] = drop
 		}
 	}
 
@@ -164,6 +164,14 @@ func parseConfigFile() {
 		fmt.Println("* Using defaults!")
 		return
 	}
+
+/* Yes! Now BurntSushi.TOML has usable tree-view, like JSON in execd.jsonCommand()!
+   So, I can manage parse process on-the-fly, involving extra syntax
+   (but still limited by TOML validator).
+*/
+//	var result map [string]interface{}
+//    toml.Unmarshal(conf_, &result)
+//    fmt.Println(result["WindowClasses"])
 
 	if err := toml.Unmarshal(conf_, &conf); err != nil {
 		panic(fmt.Errorf("Config error: unable to parse config file: %s", err.Error()))

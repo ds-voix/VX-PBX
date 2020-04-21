@@ -350,6 +350,7 @@ func Drop_() {
 
 func Drop(event t_key) {
     ActiveWindowId()
+//    fmt.Println("Drop", event.code)
 	Drop_()
 	return
 }
@@ -358,7 +359,7 @@ func Drop(event t_key) {
 func TestSeq(event t_key) {
     ActiveWindowId()
     if bypass { return }
-//    fmt.Println("test")
+//    fmt.Println("Test", event.code)
 	return
 }
 
@@ -380,6 +381,7 @@ func Respawn() { // Completelly respawn xswitcher.
 func Add(event t_key) {
     ActiveWindowId()
     if bypass { return }
+//    fmt.Println("Add", event.code)
 
 	UpdateKeys(event)
 	l := len(window_keys[ActiveWindowId_])
@@ -662,6 +664,10 @@ func main() {
 		case event = <- keyboardEvents:
 		}
 
+		if event.code < 0 || event.code > 767 { // Fuse against out-of-bounds: in old times there was need in.
+			fmt.Printf("!!! Invalid event code: %d\n", event.code);
+			continue
+		}
 		ACTIONS[event.code](event)
 	}
     os.Exit(0)

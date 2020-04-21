@@ -73,7 +73,7 @@ var (
 	"SLASH": 53,
 	"/": 53,
 	"RIGHTSHIFT": 54,
-	"RSHIFT": 54,
+	"R_SHIFT": 54,
 	"KPASTERISK": 55,
 	"LEFTALT": 56,
 	"L_ALT": 56,
