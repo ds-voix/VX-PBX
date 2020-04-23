@@ -549,7 +549,7 @@ func Switch (keys t_keys) {
 }
 
 
-func mouce(device *evdev.InputDevice) {
+func mouse(device *evdev.InputDevice) {
 	for {
 		event, err := device.ReadOne()
 		if err != nil {
@@ -617,17 +617,17 @@ func main() {
 		panic(err)
 	}
 
-	var is_mouce bool
+	var is_mouse bool
 	var is_keyboard bool
 	var skip_it bool
 
 	for _, device := range dev {
-		is_mouce = false
+		is_mouse = false
 		is_keyboard = false
 		for ev := range device.Capabilities {
 			switch ev.Type {
 			case evdev.EV_ABS, evdev.EV_REL:
-				is_mouce = true
+				is_mouse = true
 				continue
 			case evdev.EV_KEY:
 				is_keyboard = true
@@ -641,9 +641,9 @@ func main() {
 
 		if skip_it || BYPASS_DEVICES.MatchString(device.Name) { continue }
 
-		if is_mouce {
+		if is_mouse {
 			fmt.Println("mouse:", device.Name)
-			go mouce(device)
+			go mouse(device)
 		} else if is_keyboard {
 			fmt.Println("keyboard:", device.Name)
 			go keyboard(device)
@@ -668,6 +668,7 @@ func main() {
 			fmt.Printf("!!! Invalid event code: %d\n", event.code);
 			continue
 		}
+//		fmt.Println(event.code, event.value)
 		ACTIONS[event.code](event)
 	}
     os.Exit(0)
