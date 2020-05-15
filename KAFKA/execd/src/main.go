@@ -156,10 +156,10 @@ type ExecResult struct {
 	ID string             `json:"id"`
 	Processed bool        `json:"processed"` // Was this command ever been processed?
 	Command string        `json:"command"`
-	Args []string         `json:"args"`
+	Args []string         `json:"args,omitempty"`
 	Status int            `json:"status"`
-	StdOut []byte         `json:"stdout"`
-	StdErr []byte         `json:"stderr"`
+	StdOut []byte         `json:"stdout,omitempty"`
+	StdErr []byte         `json:"stderr,omitempty"`
 }
 
 type ExecResults struct {
@@ -366,6 +366,7 @@ func execCommand(c *Command) (*ExecResult) {
 			r.Status = -1 // No such command at all?
 		}
 
+		return r
 	}
 //	fmt.Printf("pid = %d\n", cmd.Process.Pid)
 
@@ -374,9 +375,10 @@ func execCommand(c *Command) (*ExecResult) {
 	}
 
 	// Wait for the process to finish or kill it after a timeout (whichever happens first):
-	go func() {
+	go func(cmd *exec.Cmd, pid int) { // !!! panic: runtime error: invalid memory address or nil pointer dereference
 		for i := 0; i < int(c.timeout * 10); i++ {
 			time.Sleep(time.Second / 10)
+			if cmd == nil { return }
 			if cmd.ProcessState != nil {
 				break
 			}
@@ -384,11 +386,13 @@ func execCommand(c *Command) (*ExecResult) {
 
 		if cmd.ProcessState == nil {
 //			cmd.Process.Signal(syscall.SIGTERM) // No, such a method terminates only this PID, leaving orphans!
-			syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+			if cmd == nil { return }
+			syscall.Kill(-pid, syscall.SIGTERM) // !!! [signal SIGSEGV: segmentation violation code=0x1 addr=0x0 pc=0x7c1ef0]
 			time.Sleep(time.Second / 2)
-			syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			if cmd == nil { return }
+			syscall.Kill(-pid, syscall.SIGKILL)
 		}
-	} ()
+	} (cmd, cmd.Process.Pid)
 
 	// https://blog.kowalczyk.info/article/wOYk/advanced-command-execution-in-go-with-osexec.html
 	var wg sync.WaitGroup
@@ -461,7 +465,7 @@ func jsonCommand(msg []byte, DEFAULTS Defaults, seq int) (COMMAND *Command, ERRO
 
 	// Parse "soft" structure: most of message values can be of more then 1 type
 	for key, value := range result {
-		switch key {
+		switch key { // strings.Trim(key, "\"'`")
 		case "id":
 			switch t := value.(type) {
 			case string:
@@ -958,7 +962,7 @@ func produceExecReport(COMMANDS *Commands, RESULTS *ExecResults, message *sarama
 	// https://golang.org/ref/spec#Exported_identifiers
 	type Report struct {
 		ClientID string       `json:"client_id"`
-		MSG string            `json:"msg"`
+		MSG string            `json:"msg"` // message.Topic, message.Partition, message.Offset
 		ERROR string          `json:"error,omitempty"`
 		UUID string           `json:"uuid,omitempty"`
 		TAG string            `json:"tag,omitempty"`
@@ -1035,7 +1039,7 @@ func processMessage(msg *sarama.ConsumerMessage) { // https://godoc.org/github.c
 	COMMANDS, ERR := jsonMessage(msg.Value)
 	if ERR != "" { // Bad message format
 //		fmt.Println("Error in message: ", msg.Offset, ERR)
-		produceExecReport(COMMANDS, RESULTS, msg, "Error parsing json")
+		produceExecReport(COMMANDS, RESULTS, msg, "Error parsing json: " + ERR)
 		return
 	}
 	if COMMANDS.host_regex != "" { // Execute only those are matching hostname
