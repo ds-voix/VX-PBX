@@ -213,7 +213,11 @@ var (
 	OFFSETS = make(map [string]int64)
 	OFFSETS_ON_START = make(map [string]int64)        // Last offsets in journal
 	OFFSETS_ON_START_OLDEST = make(map [string]int64) // First offsets in journal
+
+	config *sarama.Config
+	client sarama.Client
 	PRODUCER sarama.SyncProducer
+	PRODUCER_AGE time.Time
 
 	CAcert []byte
 	privateKey []byte
@@ -996,7 +1000,23 @@ func produceExecReport(COMMANDS *Commands, RESULTS *ExecResults, message *sarama
 	}
 	msg.Value = sarama.StringEncoder(report_)
 
+	now := time.Now()
+	if now.Sub(PRODUCER_AGE) >= time.Duration(CONF.Kafka.KeepAlive) * time.Second { // "write: broken pipe" on producer, keepAlive does not works
+		logInfo("Respawing producer...")
+		go func (p sarama.SyncProducer) {
+			if err := p.Close(); err != nil {
+				// Should not reach here
+				panic(fmt.Errorf("Shutdown error: unable to close producer: %s", err.Error()))
+			}
+		} (PRODUCER)
+		PRODUCER, err = sarama.NewSyncProducer(CONF.Kafka.Brokers, config)
+		if err != nil {
+			panic(fmt.Errorf("Init error: unable to start producer: %s", err.Error()))
+		}
+	}
+
 	partition, offset, err := PRODUCER.SendMessage(msg)
+	PRODUCER_AGE = time.Now()
 	if err != nil {
 		// Try to leave local copy of last report before aborting
 		report_file := fmt.Sprintf("%s/%s:%d:%d.crash", CONF.Consume.LocalDirectory, message.Topic,  message.Partition, message.Offset)
@@ -1450,7 +1470,7 @@ func main() {
 		}
 	}
 
-	config := sarama.NewConfig()
+	config = sarama.NewConfig()
 	config.Version = sarama.V2_2_0_0 // https://github.com/Shopify/sarama/blob/master/utils.go
 	config.ClientID = CONF.Kafka.ClientID
 	config.Consumer.Return.Errors = true
@@ -1530,7 +1550,7 @@ func main() {
 
 	// First, Create new client, to query for current offsets
 	logInfo("Init: launching kafka auxiliary client...")
-	client, err := sarama.NewClient(CONF.Kafka.Brokers, config)
+	client, err = sarama.NewClient(CONF.Kafka.Brokers, config)
 	if err != nil {
 		panic(fmt.Errorf("Init error: unable to start client: %s", err.Error()))
 	}
@@ -1586,6 +1606,7 @@ func main() {
 	// Create new producer. It is single, *GLOBAL* object
 	logInfo("Init: launching kafka producer...")
 	PRODUCER, err = sarama.NewSyncProducerFromClient(client)
+	PRODUCER_AGE = time.Now()
 	if err != nil {
 		panic(fmt.Errorf("Init error: unable to start producer: %s", err.Error()))
 	}
