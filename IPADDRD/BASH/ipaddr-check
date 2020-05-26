@@ -47,14 +47,14 @@ while : ; do
   iter=$((iter - 1))
   if [ $iter -lt 0 ]; then
     iter=100
-    find "${DIR_R}" -not -newermt '1 hour ago' -delete
+    find "${DIR_R}" -type f -not -newermt '1 hour ago' -delete
   fi
 
   v4=`grep -R ^v4=1 "${DIR_R}" | sort -k 2 | uniq -d -f 1 | awk '{print $2}'` # | grep -v "169.254.169.254"
   if [ ! -z "${v4}" ]; then # Otherwise, read() iterates over empty v4!!!
     while read dup
     do
-      hosts=`grep -Rl "${dup}" "${DIR_R}" | xargs egrep -h "^(addr|host)=" | cut -d ':' -f 1 | sort`
+      hosts=`grep -Rl "${dup}$" "${DIR_R}" | xargs egrep -h "^(addr|host)=" | cut -d ':' -f 1 | sort`
       a=`echo "$hosts" | uniq | egrep -h "^(addr)="`
       h=`echo "$hosts" | uniq | egrep -h "^(host)="`
       line=`echo "$dup:" $a :: $h`
@@ -64,7 +64,7 @@ while : ; do
 "
       else
         # Suspicious: internal dup, or agent was restarted
-        count=`grep -Rl "${dup}" "${DIR_R}" | wc -l`
+        count=`grep -Rl "${dup}$" "${DIR_R}" | wc -l`
         if [ $count -gt 1 ]; then
           DUP_C+="$count: $line
 "
@@ -76,6 +76,7 @@ while : ; do
     done <<< "${v4}"
   fi
 
+  chown :zabbix "${DIR}"
   # DUP
   echo "$DUP" | head -n -1 > "${DIR}/dup.new"
   chown :zabbix "${DIR}/dup.new"
@@ -116,7 +117,7 @@ while : ; do
   fi
 
   if [ -s "${FILE_RRL}" ]; then # RRL was activated by collector!
-    if [ "`find /run/ipaddrd/tmp/RRL -newermt '1 minute ago'`" != "" ]; then
+    if [ "`find /run/ipaddrd/tmp/RRL -type f -newermt '1 minute ago'`" != "" ]; then
       if [ ${RRL} -eq 0 ]; then
         RRL=1
         tail -n 100 "${FILE_RRL}" | /usr/bin/mail -s "RRL was activated by collector on host \"`hostname -f`\"!" "${mail}"
