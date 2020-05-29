@@ -122,8 +122,10 @@ type Consume struct {
 	FetchMax int32
 	RetryBackoff int
 	RetryMax int
+	Defer int
 }
 type Produce struct {
+	Silent bool
 	Topic string
 	Partition int
 	LocalDirectory string
@@ -131,6 +133,7 @@ type Produce struct {
 	Timeout int
 	RetryBackoff int
 	RetryMax int
+	Respawn int
 }
 type Hooks struct {
 	Start string
@@ -203,6 +206,7 @@ type Commands struct {
 	host_regex string  // Is this message intended for localhost?
 	tag string         // Some tag can be set, to facilitate further analysis.
 	commands []Command
+	timestamp time.Time
 // After execution, store result together with command. To facilitate reporting.
 	results ExecResults // Separated structure, to be json-serialized
 }
@@ -226,6 +230,9 @@ var (
 	hookStart bool
 	hookStop bool
 	exitSignal os.Signal // Report exit cause (except of SIGKILL)
+
+    // Coordinate exit on signal: don't try to process the rest of messages in batch
+	interrupt bool
 
 	// Syslog logger
 	SYSLOG *syslog.Writer
@@ -837,6 +844,17 @@ func jsonMessage(msg []byte) (COMMANDS *Commands, ERROR string) {
 				return nil, fmt.Sprintf("\"commands\" field isn't [commands], but [%T]", t)
 			} // switch t
 
+		case "timestamp":
+			switch t := value.(type) {
+			case string:
+				cmd.timestamp, err = time.Parse("2006-01-02T15:04:05-0700", value.(string)) // ISO 8601
+				if err != nil {
+					return nil, fmt.Sprintf("\"timestamp\" isn't ISO 8601: error = %s", err.Error())
+				}
+			default:
+				return nil, fmt.Sprintf("\"timestamp\" field isn't [string], but [%T]", t)
+			} // switch t
+
 		default:
 			return nil, fmt.Sprintf("Unknown key in message: \"%s\"", key)
 		} // switch key
@@ -951,7 +969,6 @@ func consume(topics []string, master sarama.Consumer) (chan *sarama.ConsumerMess
 
 				case msg := <-consumer.Messages():
 					consumers <- msg
-//					fmt.Println("Got message on topic ", topic, msg.Value)
 				}
 			}
 		}(topic, consumer)
@@ -974,6 +991,8 @@ func produceExecReport(COMMANDS *Commands, RESULTS *ExecResults, message *sarama
 		RESULTS []*ExecResult `json:"exec,omitempty"`
 		TimeStamp string      `json:"timestamp,omitempty"`
 	}
+	var report_path, report_file string
+
 	t := time.Now()
 	report := Report{ClientID: CONF.Kafka.ClientID,
 					MSG: fmt.Sprintf("[%s](%d):%d", message.Topic, message.Partition, message.Offset),
@@ -998,23 +1017,49 @@ func produceExecReport(COMMANDS *Commands, RESULTS *ExecResults, message *sarama
 	if err != nil {
 		panic(fmt.Errorf("Produce error: unable to marshal json: %s", err.Error()))
 	}
-	msg.Value = sarama.StringEncoder(report_)
 
-	now := time.Now()
-	if now.Sub(PRODUCER_AGE) >= time.Duration(CONF.Kafka.KeepAlive) * time.Second { // "write: broken pipe" on producer, keepAlive does not works
-		logInfo("Respawing producer...")
-		go func (p sarama.SyncProducer) {
-			if err := p.Close(); err != nil {
-				// Should not reach here
-				panic(fmt.Errorf("Shutdown error: unable to close producer: %s", err.Error()))
-			}
-		} (PRODUCER)
-		PRODUCER, err = sarama.NewSyncProducer(CONF.Kafka.Brokers, config)
-		if err != nil {
-			panic(fmt.Errorf("Init error: unable to start producer: %s", err.Error()))
+	if len(CONF.Produce.LocalDirectory) > 0 {
+		report_path = fmt.Sprintf("%s/%s/%d/", CONF.Produce.LocalDirectory, message.Topic, message.Partition)
+		if err = os.MkdirAll(report_path, 0700); err != nil {
+			panic(fmt.Errorf("Produce error: unable to create local report path \"%s\": %s", report_path, err.Error()))
 		}
+
+		report_file = fmt.Sprintf("%s/%d", report_path, message.Offset)
+		os.Remove(report_file) // Remove if exists, to make new hardlink at the end
+		f, err := os.OpenFile(report_file, os.O_RDWR|os.O_CREATE, 0600)
+	 	if err != nil {
+ 			panic(fmt.Errorf("Produce error: unable to open report file \"%s\": %s", report_file, err.Error()))
+	 	}
+
+	 	defer f.Close()
+
+	 	if _, err := f.Write(report_); err != nil {
+ 			panic(fmt.Errorf("Produce error: unable to write report \"%s\": %s", report_file, err.Error()))
+	 	}
 	}
 
+	if CONF.Produce.Silent {
+		logDebug("Skip sending report due to Produce.Silent option set.")
+		return
+	}
+
+	if CONF.Produce.Respawn > 0 { // Respawn stolen producer
+		now := time.Now()
+		if now.Sub(PRODUCER_AGE) >= time.Duration(CONF.Produce.Respawn) * time.Second { // "write: broken pipe" on producer, keepAlive does not works
+			logInfo("Respawing producer...")
+			go func (p sarama.SyncProducer) {
+				if err := p.Close(); err != nil {
+					// Should not reach here
+					panic(fmt.Errorf("Shutdown error: unable to close producer: %s", err.Error()))
+				}
+			} (PRODUCER)
+			PRODUCER, err = sarama.NewSyncProducer(CONF.Kafka.Brokers, config)
+			if err != nil {
+				panic(fmt.Errorf("Init error: unable to start producer: %s", err.Error()))
+			}
+		}
+	}
+	msg.Value = sarama.StringEncoder(report_)
 	partition, offset, err := PRODUCER.SendMessage(msg)
 	PRODUCER_AGE = time.Now()
 	if err != nil {
@@ -1029,22 +1074,16 @@ func produceExecReport(COMMANDS *Commands, RESULTS *ExecResults, message *sarama
 		logInfo(fmt.Sprintf("Report is stored in topic(%s)/partition(%d)/offset(%d)", msg.Topic, partition, offset))
 	}
 
-	if len(CONF.Produce.LocalDirectory) > 0 {
-		report_path := fmt.Sprintf("%s/%s/%d/", CONF.Produce.LocalDirectory, msg.Topic, partition)
-		if err = os.MkdirAll(report_path, 0700); err != nil {
-			panic(fmt.Errorf("Produce error: unable to create local report path \"%s\": %s", report_path, err.Error()))
+	if len(CONF.Produce.LocalDirectory) > 0 { // Store duplicate with produced numbers
+		report_pathX := fmt.Sprintf("%s/%s/%d/", CONF.Produce.LocalDirectory, msg.Topic, partition)
+		if err = os.MkdirAll(report_pathX, 0700); err != nil {
+			panic(fmt.Errorf("Produce error: unable to create local report path \"%s\": %s", report_pathX, err.Error()))
 		}
 
-		report_file := fmt.Sprintf("%s/%d", report_path, offset)
-		f, err := os.OpenFile(report_file, os.O_RDWR|os.O_CREATE, 0600)
+		report_fileX := fmt.Sprintf("%s/%d", report_pathX, offset)
+		err := os.Link(report_file, report_fileX)
 	 	if err != nil {
- 			panic(fmt.Errorf("Produce error: unable to open report file \"%s\": %s", report_file, err.Error()))
-	 	}
-
-	 	defer f.Close()
-
-	 	if _, err := f.Write(report_); err != nil {
- 			panic(fmt.Errorf("Produce error: unable to write report \"%s\": %s", report_file, err.Error()))
+ 			panic(fmt.Errorf("Produce error: unable to link report file \"%s\": %s", report_fileX, err.Error()))
 	 	}
 	}
 	return
@@ -1053,27 +1092,54 @@ func produceExecReport(COMMANDS *Commands, RESULTS *ExecResults, message *sarama
 // Void ProcessMessage() for messages received from kafka
 func processMessage(msg *sarama.ConsumerMessage) { // https://godoc.org/github.com/Shopify/sarama#ConsumerMessage
 	fqdn := fqdn.Get()
-	defer commitOffset(msg.Topic, msg.Offset + 1) // Offset must be incremented only after processMessage()
 
 	RESULTS := &ExecResults{}
 	COMMANDS, ERR := jsonMessage(msg.Value)
 	if ERR != "" { // Bad message format
-//		fmt.Println("Error in message: ", msg.Offset, ERR)
+		defer commitOffset(msg.Topic, msg.Offset + 1) // Offset must be incremented only after processMessage()
 		produceExecReport(COMMANDS, RESULTS, msg, "Error parsing json: " + ERR)
 		return
 	}
 	if COMMANDS.host_regex != "" { // Execute only those are matching hostname
 		matched, err := regexp.MatchString(COMMANDS.host_regex, fqdn)
 		if err != nil { // Invalid regexp syntax
-//!!!			produceCommandError("Invalid regexp", COMMANDS)
+			defer commitOffset(msg.Topic, msg.Offset + 1) // Offset must be incremented only after processMessage()
 			produceExecReport(COMMANDS, RESULTS, msg, "Invalid regexp: " + COMMANDS.host_regex)
 			return
 		}
 		if !matched { // This command is not intended for this host
+			defer commitOffset(msg.Topic, msg.Offset + 1) // Offset must be incremented only after processMessage()
 			return
 		}
 	}
 
+	// Defer execution of received commands (seconds after command.timestamp)
+	if CONF.Consume.Defer > 0 {
+		timer := make(chan struct{})
+		now := time.Now()
+		if now.Sub(COMMANDS.timestamp) <= time.Duration(CONF.Consume.Defer) * time.Second {
+			go func () {
+				time.Sleep((time.Duration(CONF.Consume.Defer) * time.Second) - now.Sub(COMMANDS.timestamp))
+				timer <- struct{}{}
+			} ()
+			signals := make(chan os.Signal, 1)
+			signal.Notify(signals, syscall.SIGHUP, syscall.SIGINT, syscall.SIGKILL, syscall.SIGTERM)
+			logDebug("defer")
+			loop: for {
+				select {
+				case <- timer:
+					logDebug("timer")
+					break loop
+				case <-signals:
+					interrupt = true
+					logDebug("interrupt")
+					return
+				}
+			}
+		}
+	}
+
+	defer commitOffset(msg.Topic, msg.Offset + 1) // Offset must be incremented only after processMessage()
 	defer produceExecReport(COMMANDS, RESULTS, msg, "")
 
 	for i, _ := range COMMANDS.commands {
@@ -1200,7 +1266,7 @@ func parseConfigFile() (*Config) {
 	conf.Produce.Timeout = 30
 	conf.Produce.RetryBackoff = 10
 	conf.Produce.RetryMax = 8640 // !!! 10^4 takes about 1MB of RSS, because sarama fills some linear structure to do !!!
-
+	conf.Produce.Respawn = -1 // Default to use Kafka.KeepAlive
 
 	if env_config, ok := os.LookupEnv("CONFIG"); ok {
 		*config_path = env_config
@@ -1501,6 +1567,9 @@ func main() {
 	}
 	if CONF.Kafka.KeepAlive > 0 {
 		config.Net.KeepAlive = time.Second * time.Duration(CONF.Kafka.KeepAlive)
+		if CONF.Produce.Respawn < 0 {
+			CONF.Produce.Respawn = CONF.Kafka.KeepAlive
+		}
 	}
 	if len(CONF.Kafka.LocalAddr) > 0 {
 		a := net.ParseIP(CONF.Kafka.LocalAddr)
@@ -1661,6 +1730,9 @@ func main() {
 				msgCount++
 				logDebug("Received messages", string(msg.Key), string(msg.Value), msg.Offset, msg.Partition)
 				processMessage(msg)
+				if interrupt { // Interrupt deferred processing
+					doneCh <- struct{}{}
+				}
 				// Try to exec hook, "hookStart" will be invalidated after execution.
 				if hookStart {
 					doHookStart()
