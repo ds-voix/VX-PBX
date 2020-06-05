@@ -1,8 +1,8 @@
 package main
 /*
- execd v0.9
+ execd v0.9.2
 /////////////////////////////////////////////////////////////////////////////
- Copyright (C) 2019 Dmitry Svyatogorov ds@vo-ix.ru
+ Copyright (C) 2019-2020 Dmitry Svyatogorov ds@vo-ix.ru
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Affero General Public License as
@@ -201,12 +201,14 @@ type Defaults struct {
 }
 
 type Commands struct {
-	producer string    // ClientID of producer
-	uuid string        // UUID for reporting
-	host_regex string  // Is this message intended for localhost?
-	tag string         // Some tag can be set, to facilitate further analysis.
+	producer string     // ClientID of producer
+	uuid string         // UUID for reporting
+	host_regex string   // Is this message intended for localhost?
+	tag string          // Some tag can be set, to facilitate further analysis.
 	commands []Command
-	timestamp time.Time
+	timestamp time.Time // `json:"timestamp,omitempty"`
+	execTTL int64       // `json:"exec_ttl,omitempty"`  Don't exec commands with TTL expired. E.g., skip some checks.
+	reportTTL int64     // `json:"report_ttl,omitempty"` Don't send report for commands after TTL expired.
 // After execution, store result together with command. To facilitate reporting.
 	results ExecResults // Separated structure, to be json-serialized
 }
@@ -217,6 +219,9 @@ var (
 	OFFSETS = make(map [string]int64)
 	OFFSETS_ON_START = make(map [string]int64)        // Last offsets in journal
 	OFFSETS_ON_START_OLDEST = make(map [string]int64) // First offsets in journal
+
+	OFFSETSx = make(map [string]int64)                // Stop agent when reaching (all of) this offsets
+	OFFSETSxx = make(map [string]bool)                // Stop agent when reaching (all of) this offsets: mark terminated topics
 
 	config *sarama.Config
 	client sarama.Client
@@ -694,6 +699,7 @@ func jsonMessage(msg []byte) (COMMANDS *Commands, ERROR string) {
 			if len(cmd.producer) < 1 {
 				return nil, "Empty \"producer\" field!"
 			}
+
 		case "uuid":
 			switch t := value.(type) {
 			case string:
@@ -706,6 +712,7 @@ func jsonMessage(msg []byte) (COMMANDS *Commands, ERROR string) {
 			if len(cmd.uuid) < 8 { // M.b., no need in???
 				return nil, "\"uuid\" has length < 8!"
 			}
+
 		case "error_fails":
 			switch t := value.(type) {
 			case float64:
@@ -715,6 +722,7 @@ func jsonMessage(msg []byte) (COMMANDS *Commands, ERROR string) {
 			default:
 				return nil, fmt.Sprintf("\"error_fails\" field isn't [bool|number], but [%T]", t)
 			} // switch t
+
 		case "no_exec":
 			switch t := value.(type) {
 			case float64:
@@ -724,6 +732,7 @@ func jsonMessage(msg []byte) (COMMANDS *Commands, ERROR string) {
 			default:
 				return nil, fmt.Sprintf("\"no_exec\" field isn't [bool|number], but [%T]", t)
 			} // switch t
+
 		case "run_as":
 			switch t := value.(type) {
 			case string:
@@ -759,6 +768,7 @@ func jsonMessage(msg []byte) (COMMANDS *Commands, ERROR string) {
 			default:
 				return nil, fmt.Sprintf("\"run_as\" field isn't [string], but [%T]", t)
 			} // switch t
+
 		case "use_shell":
 			switch t := value.(type) {
 			case float64:
@@ -768,6 +778,7 @@ func jsonMessage(msg []byte) (COMMANDS *Commands, ERROR string) {
 			default:
 				return nil, fmt.Sprintf("\"use_shell\" field isn't [bool|number], but [%T]", t)
 			} // switch t
+
 		case "no_wait":
 			switch t := value.(type) {
 			case float64:
@@ -777,6 +788,7 @@ func jsonMessage(msg []byte) (COMMANDS *Commands, ERROR string) {
 			default:
 				return nil, fmt.Sprintf("\"no_wait\" field isn't [bool|number], but [%T]", t)
 			} // switch t
+
 		case "timeout":
 			switch t := value.(type) {
 			case float64:
@@ -787,6 +799,7 @@ func jsonMessage(msg []byte) (COMMANDS *Commands, ERROR string) {
 			default:
 				return nil, fmt.Sprintf("\"timeout\" field isn't [number], but [%T]", t)
 			} // switch t
+
 		case "max_reply":
 			switch t := value.(type) {
 			case float64:
@@ -797,6 +810,7 @@ func jsonMessage(msg []byte) (COMMANDS *Commands, ERROR string) {
 			default:
 				return nil, fmt.Sprintf("\"max_reply\" field isn't [number], but [%T]", t)
 			} // switch t
+
 		case "host_regex":
 			switch t := value.(type) {
 			case string:
@@ -804,6 +818,7 @@ func jsonMessage(msg []byte) (COMMANDS *Commands, ERROR string) {
 			default:
 				return nil, fmt.Sprintf("\"host_regex\" field isn't [string], but [%T]", t)
 			} // switch t
+
 		case "tag":
 			switch t := value.(type) {
 			case string:
@@ -811,6 +826,7 @@ func jsonMessage(msg []byte) (COMMANDS *Commands, ERROR string) {
 			default:
 				return nil, fmt.Sprintf("\"tag\" field isn't [string], but [%T]", t)
 			} // switch t
+
 		case "set_env":
 			switch t := value.(type) {
 			case string:
@@ -828,6 +844,7 @@ func jsonMessage(msg []byte) (COMMANDS *Commands, ERROR string) {
 			default:
 				return nil, fmt.Sprintf("\"set_env\" field isn't [string], but [%T]", t)
 			} // switch t
+
 		case "set_dir":
 			switch t := value.(type) {
 			case string:
@@ -853,6 +870,22 @@ func jsonMessage(msg []byte) (COMMANDS *Commands, ERROR string) {
 				}
 			default:
 				return nil, fmt.Sprintf("\"timestamp\" field isn't [string], but [%T]", t)
+			} // switch t
+
+		case "exec_ttl":
+			switch t := value.(type) {
+			case float64:
+				cmd.execTTL = int64(value.(float64))
+			default:
+				return nil, fmt.Sprintf("\"exec_ttl\" field isn't [number], but [%T]", t)
+			} // switch t
+
+		case "report_ttl":
+			switch t := value.(type) {
+			case float64:
+				cmd.reportTTL = int64(value.(float64))
+			default:
+				return nil, fmt.Sprintf("\"report_ttl\" field isn't [number], but [%T]", t)
 			} // switch t
 
 		default:
@@ -1039,12 +1072,23 @@ func produceExecReport(COMMANDS *Commands, RESULTS *ExecResults, message *sarama
 	}
 
 	if CONF.Produce.Silent {
-		logDebug("Skip sending report due to Produce.Silent option set.")
+		logDebug("produceExecReport: Skip sending report due to Produce.Silent option set.")
+		return
+	}
+
+	now := time.Now()
+	if COMMANDS.reportTTL > 0 {
+		if now.Sub(COMMANDS.timestamp) >= time.Duration(COMMANDS.reportTTL) * time.Second {
+			logDebug("produceExecReport: Skip sending report due to exceeded reportTTL")
+			return
+		}
+	}
+	if COMMANDS.reportTTL < 0 { // No need in report at all
+		logDebug("produceExecReport: Skip sending report due to negative reportTTL")
 		return
 	}
 
 	if CONF.Produce.Respawn > 0 { // Respawn stolen producer
-		now := time.Now()
 		if now.Sub(PRODUCER_AGE) >= time.Duration(CONF.Produce.Respawn) * time.Second { // "write: broken pipe" on producer, keepAlive does not works
 			logInfo("Respawing producer...")
 			go func (p sarama.SyncProducer) {
@@ -1091,6 +1135,16 @@ func produceExecReport(COMMANDS *Commands, RESULTS *ExecResults, message *sarama
 
 // Void ProcessMessage() for messages received from kafka
 func processMessage(msg *sarama.ConsumerMessage) { // https://godoc.org/github.com/Shopify/sarama#ConsumerMessage
+    if len(OFFSETSx) > 0 {
+		if msg.Offset >= OFFSETSx[msg.Topic] {
+			OFFSETSxx[msg.Topic] = true
+			if len(OFFSETSxx) == len(OFFSETSx) {
+				panic(fmt.Errorf("processMessage: All stop-offsets are now reached. Catapulting!"))
+			}
+			return
+		}
+	}
+
 	fqdn := fqdn.Get()
 
 	RESULTS := &ExecResults{}
@@ -1113,10 +1167,10 @@ func processMessage(msg *sarama.ConsumerMessage) { // https://godoc.org/github.c
 		}
 	}
 
+	now := time.Now()
 	// Defer execution of received commands (seconds after command.timestamp)
 	if CONF.Consume.Defer > 0 {
 		timer := make(chan struct{})
-		now := time.Now()
 		if now.Sub(COMMANDS.timestamp) <= time.Duration(CONF.Consume.Defer) * time.Second {
 			go func () {
 				time.Sleep((time.Duration(CONF.Consume.Defer) * time.Second) - now.Sub(COMMANDS.timestamp))
@@ -1124,18 +1178,27 @@ func processMessage(msg *sarama.ConsumerMessage) { // https://godoc.org/github.c
 			} ()
 			signals := make(chan os.Signal, 1)
 			signal.Notify(signals, syscall.SIGHUP, syscall.SIGINT, syscall.SIGKILL, syscall.SIGTERM)
-			logDebug("defer")
+			logDebug("processMessage: defer")
 			loop: for {
 				select {
 				case <- timer:
-					logDebug("timer")
+					logDebug("processMessage: timer")
 					break loop
 				case <-signals:
 					interrupt = true
-					logDebug("interrupt")
+					logDebug("processMessage: interrupt")
 					return
 				}
 			}
+		}
+	}
+
+	if COMMANDS.execTTL > 0 {
+		now = time.Now()
+		if now.Sub(COMMANDS.timestamp) >= time.Duration(COMMANDS.execTTL) * time.Second {
+			defer commitOffset(msg.Topic, msg.Offset + 1) // Offset must be incremented only after processMessage()
+			logDebug("processMessage: Skip execTTL")
+			return
 		}
 	}
 
@@ -1278,7 +1341,7 @@ func parseConfigFile() (*Config) {
 	verbose := F.BoolP("verbose", "v", false, "Increase log level to NOTICE")
 	F.StringP("uninitialized.topic.name", "", "", "Note, that \"--topic=offset\" keys have to be provided only once, at initialization phase")
 	if err := F.Parse(os.Args[1:]); err != nil {
-		logErr(err.Error())
+		logErr("Config CLI first-pass: " + err.Error())
 	}
 	if *DEBUG {
 		LOG_LEVEL = syslog.LOG_DEBUG
@@ -1389,6 +1452,7 @@ func parseConfigFile() (*Config) {
 
 
 	cli_offsets := make(map[string]*string)
+	cli_offsets_x := make(map[string]*string)
 	if len(conf.Consume.Topics) > 0 {
 		// Test whether local path is writable
 		for _, t := range conf.Consume.Topics {
@@ -1402,6 +1466,7 @@ func parseConfigFile() (*Config) {
 			} else {
 				if len(offset) == 0 {
 					cli_offsets[t] = F.String(t, "", fmt.Sprintf("Topic \"%s\" has no stored offset", t))
+					cli_offsets_x[t] = F.String(t + "^", "", fmt.Sprintf("Topic \"%s\" has no stored offset", t))
 				} else {
 					if OFFSETS[t], err = strconv.ParseInt(fmt.Sprintf("%s", offset), 10, 64); err != nil {
 						panic(fmt.Errorf("Config error: non-integer offset for topic \"%s\": %s", t, offset))
@@ -1425,9 +1490,24 @@ func parseConfigFile() (*Config) {
 			}
 		}
 	}
+	offsets_x_configured := 0
+	for key, value := range cli_offsets_x {
+		if *value != "" {
+			if OFFSETSx[key], err = strconv.ParseInt(*value, 10, 64); err != nil {
+				panic(fmt.Errorf("Config error: non-integer stop-offset for topic \"%s\"", key))
+			}
+			offsets_x_configured++
+		}
+	}
+	if (offsets_x_configured > 0) && (len(cli_offsets_x) != offsets_x_configured) {
+		logInfo("Config: stop-offsets must be set all or none!")
+	}
 
 	for key, value := range OFFSETS {
 		logInfo("Config: Offset for topic:", key, "=", value)
+	}
+	for key, value := range OFFSETSx {
+		logInfo("Config: Stop-offset for topic:", key, "=", value)
 	}
 
 	if len(conf.Hooks.Start) > 0 {
