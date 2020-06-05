@@ -9,6 +9,8 @@ The interface between shared messaging bus and any "regular" software.
 It although can be used as a kind of "pdsh". "Poll" model, coupled with "push" latency.
 The concept is: "Each agent reviews each message on the bus." * But further processing can be filtered.
 
+- "modules" - common modules between execd, dnsd etc.
+
 - "kafka" contains the number of solutions to get Kafka server compliant with the project demands:
 * High Availability, across the world (thus, 3+ sites)
 * SSL: All communications must be encrypted. Connections must be verified against CA.
@@ -20,4 +22,3 @@ The concept is: "Each agent reviews each message on the bus." * But further proc
 As for ZooKeeper v3.4, it has nothing about security. SSL starts with 3.5.
 In any case, I recommend to put all about messaging inside some security perimeter.
 IMO, no one in java world thinks about security. Because of it's "enterprise" nature. Security brings down KPI.
-
