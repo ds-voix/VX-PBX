@@ -8,6 +8,17 @@ import (
 	"os"
 )
 
+
+type XLog struct {
+	// Syslog logger
+	SYSLOG *syslog.Writer
+	STDOUT *log.Logger
+	STDERR *log.Logger
+
+	DEBUG *bool
+	LOG_LEVEL syslog.Priority // LOG_EMERG=0 .. LOG_DEBUG=7
+}
+
 const (
 	// https://unix.superglobalmegacorp.com/Net2/newsrc/sys/syslog.h.html
 	LOG_EMERG	= 0	/* system is unusable */
@@ -19,28 +30,23 @@ const (
 	LOG_INFO	= 6	/* informational */
 	LOG_DEBUG	= 7	/* debug-level messages */
 )
-var (
-	// Syslog logger
-	SYSLOG *syslog.Writer
-	STDOUT *log.Logger
-	STDERR *log.Logger
-
-    DEBUG *bool
-    LOG_LEVEL syslog.Priority // LOG_EMERG=0 .. LOG_DEBUG=7
-)
 
 
-func New(daemon_name string) {
+func New(daemon_name string) (XLog) {
+    var XLOG XLog
+    Debug := false
 	// Initialize logging pathes
-	SYSLOG, _ = syslog.New(syslog.LOG_DEBUG | syslog.LOG_DAEMON, daemon_name) // M.b. NULL pointer, in case of some error
-	STDOUT = log.New(os.Stdout, "", log.LstdFlags)
-	STDERR = log.New(os.Stderr, "", log.LstdFlags)
+	XLOG.SYSLOG, _ = syslog.New(syslog.LOG_DEBUG | syslog.LOG_DAEMON, daemon_name) // M.b. NULL pointer, in case of some error
+	XLOG.STDOUT = log.New(os.Stdout, "", log.LstdFlags)
+	XLOG.STDERR = log.New(os.Stderr, "", log.LstdFlags)
+	XLOG.DEBUG = &Debug
+	return XLOG
 }
 
 
 // void: Log to syslog/stdout/stderr, depending on settings
-func Log(severity syslog.Priority, message_ ...interface{}) {
-    if severity > LOG_LEVEL { return }
+func (xl XLog) Log(severity syslog.Priority, message_ ...interface{}) {
+    if severity > xl.LOG_LEVEL { return }
 //    message := (strings.Trim(fmt.Sprint(message_...), "[]"))
 	message := fmt.Sprint(message_...)
 	message = message[1:]
@@ -65,52 +71,52 @@ func Log(severity syslog.Priority, message_ ...interface{}) {
 			level = "INFO"
 	}
 
-	if (DEBUG != nil && *DEBUG) || (SYSLOG == nil) {
+	if (xl.DEBUG != nil && *xl.DEBUG) || (xl.SYSLOG == nil) {
 		if severity > syslog.LOG_WARNING {
-			STDERR.Printf("%s: %s", level, message)
+			xl.STDERR.Printf("%s: %s", level, message)
 		} else {
-			STDOUT.Printf("%s: %s", level, message)
+			xl.STDOUT.Printf("%s: %s", level, message)
 		}
 	} else {
 		switch severity { // Double work, due to the absence of "syslog.Log(string, severity)"
 			case syslog.LOG_EMERG:
-				err = SYSLOG.Emerg(message)
+				err = xl.SYSLOG.Emerg(message)
 			case syslog.LOG_ALERT:
-				err = SYSLOG.Alert(message)
+				err = xl.SYSLOG.Alert(message)
 			case syslog.LOG_CRIT:
-				err = SYSLOG.Crit(message)
+				err = xl.SYSLOG.Crit(message)
 			case syslog.LOG_ERR:
-				err = SYSLOG.Err(message)
+				err = xl.SYSLOG.Err(message)
 			case syslog.LOG_WARNING:
-				err = SYSLOG.Warning(message)
+				err = xl.SYSLOG.Warning(message)
 			case syslog.LOG_NOTICE:
-				err = SYSLOG.Notice(message)
+				err = xl.SYSLOG.Notice(message)
 			case syslog.LOG_INFO:
-				err = SYSLOG.Info(message)
+				err = xl.SYSLOG.Info(message)
 			default:
-				err = SYSLOG.Debug(message)
+				err = xl.SYSLOG.Debug(message)
 		}
 		if err != nil {
-			STDERR.Printf("SYSLOG failed \"%s\" to write %s. Message was: \"%s\"", err.Error(), level, message)
+			xl.STDERR.Printf("SYSLOG failed \"%s\" to write %s. Message was: \"%s\"", err.Error(), level, message)
 		}
 	}
 }
 
 // Unified log implementation. Less code >> more CPU.
-func Debug (message ...interface{}) { Log(syslog.LOG_DEBUG, message) }
-func Info (message ...interface{}) { Log(syslog.LOG_INFO, message) }
-func Notice (message ...interface{}) { Log(syslog.LOG_NOTICE, message) }
+func (xl XLog) Debug (message ...interface{}) { xl.Log(syslog.LOG_DEBUG, message) }
+func (xl XLog) Info (message ...interface{}) { xl.Log(syslog.LOG_INFO, message) }
+func (xl XLog) Notice (message ...interface{}) { xl.Log(syslog.LOG_NOTICE, message) }
 //
-func Warning (message ...interface{}) { Log(syslog.LOG_WARNING, message) }
-func Warn (message ...interface{}) { Log(syslog.LOG_WARNING, message) }
+func (xl XLog) Warning (message ...interface{}) { xl.Log(syslog.LOG_WARNING, message) }
+func (xl XLog) Warn (message ...interface{}) { xl.Log(syslog.LOG_WARNING, message) }
 //
-func Err (message ...interface{}) { Log(syslog.LOG_ERR, message) }
-func Error (message ...interface{}) { Log(syslog.LOG_ERR, message) }
+func (xl XLog) Err (message ...interface{}) { xl.Log(syslog.LOG_ERR, message) }
+func (xl XLog) Error (message ...interface{}) { xl.Log(syslog.LOG_ERR, message) }
 //
-func Crit (message ...interface{}) { Log(syslog.LOG_CRIT, message) }
-func Critical (message ...interface{}) { Log(syslog.LOG_CRIT, message) }
+func (xl XLog) Crit (message ...interface{}) { xl.Log(syslog.LOG_CRIT, message) }
+func (xl XLog) Critical (message ...interface{}) { xl.Log(syslog.LOG_CRIT, message) }
 //
-func Alert (message ...interface{}) { Log(syslog.LOG_ALERT, message) }
+func (xl XLog) Alert (message ...interface{}) { xl.Log(syslog.LOG_ALERT, message) }
 //
-func Emerg (message ...interface{}) { Log(syslog.LOG_EMERG, message) }
-func Fatal (message ...interface{}) { Log(syslog.LOG_EMERG, message) }
+func (xl XLog) Emerg (message ...interface{}) { xl.Log(syslog.LOG_EMERG, message) }
+func (xl XLog) Fatal (message ...interface{}) { xl.Log(syslog.LOG_EMERG, message) }
