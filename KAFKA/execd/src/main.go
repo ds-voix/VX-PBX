@@ -1,6 +1,6 @@
 package main
 /*
- execd v0.9.2
+ execd v0.9.3
 /////////////////////////////////////////////////////////////////////////////
  Copyright (C) 2019-2020 Dmitry Svyatogorov ds@vo-ix.ru
 
@@ -136,10 +136,18 @@ type Produce struct {
 	Respawn int
 }
 type Hooks struct {
+	PreStart string
 	Start string
 	Stop string
 	Produce bool
 	Tag string
+}
+type Workers struct {
+	Required []string    // Start inside self context. Panic if dies.
+	Respawn []string     // Start inside self context. Respawn if dies.
+	Test string          // Execute after each message processing. Terminate self-operation if exits non-zero.
+	TestDelay int        // Wait up to N seconds till "Required" bacames available for "Test" at Init stage.
+    TestAttempts int     // Perform N attempts during the delay. Continue execution at first success.
 }
 type Config struct {
 	ZooKeeper ZooKeeper  // ZooKeeper connection settings
@@ -147,6 +155,8 @@ type Config struct {
 	Consume   Consume    // Kafka journal to get command batches
 	Produce   Produce    // Kafka journal to output results
 	Hooks     Hooks      // Run hooks after start/before stop
+	Workers   Workers    // Workers are started in self context and directly watched
+	Path      string     // Is used to set global mutex: multiple execd instances are allower, but with different configs!
 }
 
 // https://goinbigdata.com/golang-pass-by-pointer-vs-pass-by-value/
@@ -232,12 +242,14 @@ var (
 	privateKey []byte
 	cert []byte
 
+	hookPreStart bool
 	hookStart bool
 	hookStop bool
 	exitSignal os.Signal // Report exit cause (except of SIGKILL)
 
     // Coordinate exit on signal: don't try to process the rest of messages in batch
 	interrupt bool
+	waitWorkers *sync.WaitGroup
 
 	// Syslog logger
 	SYSLOG *syslog.Writer
@@ -391,24 +403,49 @@ func execCommand(c *Command) (*ExecResult) {
 	}
 
 	// Wait for the process to finish or kill it after a timeout (whichever happens first):
-	go func(cmd *exec.Cmd, pid int) { // !!! panic: runtime error: invalid memory address or nil pointer dereference
-		for i := 0; i < int(c.timeout * 10); i++ {
-			time.Sleep(time.Second / 10)
-			if cmd == nil { return }
-			if cmd.ProcessState != nil {
-				break
+	if c.timeout > 0 {
+		go func(cmd *exec.Cmd, pid int) { // !!! panic: runtime error: invalid memory address or nil pointer dereference
+			for i := 0; i < int(c.timeout * 10); i++ {
+				time.Sleep(time.Second / 10)
+				if cmd == nil { return }
+				if cmd.ProcessState != nil {
+					break
+				}
 			}
-		}
 
-		if cmd.ProcessState == nil {
-//			cmd.Process.Signal(syscall.SIGTERM) // No, such a method terminates only this PID, leaving orphans!
-			if cmd == nil { return }
-			syscall.Kill(-pid, syscall.SIGTERM) // !!! [signal SIGSEGV: segmentation violation code=0x1 addr=0x0 pc=0x7c1ef0]
-			time.Sleep(time.Second / 2)
-			if cmd == nil { return }
-			syscall.Kill(-pid, syscall.SIGKILL)
-		}
-	} (cmd, cmd.Process.Pid)
+			if cmd.ProcessState == nil {
+//				cmd.Process.Signal(syscall.SIGTERM) // No, such a method terminates only this PID, leaving orphans!
+				if cmd == nil { return }
+				syscall.Kill(-pid, syscall.SIGTERM) // !!! [signal SIGSEGV: segmentation violation code=0x1 addr=0x0 pc=0x7c1ef0]
+				time.Sleep(time.Second / 2)
+				if cmd == nil { return }
+				syscall.Kill(-pid, syscall.SIGKILL)
+			}
+		} (cmd, cmd.Process.Pid)
+	} else if c.timeout == 0 { // Wait for interrupt
+		go func(cmd *exec.Cmd, pid int) {
+			defer waitWorkers.Done()
+			for {
+				time.Sleep(time.Second / 50)
+				if cmd == nil { return }
+				if cmd.ProcessState != nil {
+					break
+				}
+				if interrupt {
+					break
+				}
+			}
+
+			if cmd.ProcessState == nil {
+//				cmd.Process.Signal(syscall.SIGTERM) // No, such a method terminates only this PID, leaving orphans!
+				if cmd == nil { return }
+				syscall.Kill(-pid, syscall.SIGTERM) // !!! [signal SIGSEGV: segmentation violation code=0x1 addr=0x0 pc=0x7c1ef0]
+				time.Sleep(time.Second / 2)
+				if cmd == nil { return }
+				syscall.Kill(-pid, syscall.SIGKILL)
+			}
+		} (cmd, cmd.Process.Pid)
+	}
 
 	// https://blog.kowalczyk.info/article/wOYk/advanced-command-execution-in-go-with-osexec.html
 	var wg sync.WaitGroup
@@ -995,6 +1032,9 @@ func consume(topics []string, master sarama.Consumer) (chan *sarama.ConsumerMess
 
 		go func(topic string, consumer sarama.PartitionConsumer) {
 			for {
+				if interrupt {
+					return
+				}
 				select {
 				case consumerError := <-consumer.Errors():
 					errors <- consumerError
@@ -1204,6 +1244,14 @@ func processMessage(msg *sarama.ConsumerMessage) { // https://godoc.org/github.c
 
 	defer commitOffset(msg.Topic, msg.Offset + 1) // Offset must be incremented only after processMessage()
 	defer produceExecReport(COMMANDS, RESULTS, msg, "")
+	defer func () {
+		if len(CONF.Workers.Test) > 0 { // Test workers health after execution
+			if ! workerTest() {
+				interrupt = true
+				logEmerg(fmt.Errorf("processMessage: Workers.Test failed! Terminating execd..."))
+			}
+		}
+	} ()
 
 	for i, _ := range COMMANDS.commands {
 		if COMMANDS.commands[i].host_regex != "" { // Execute only those are matching hostname
@@ -1298,6 +1346,18 @@ func doHookStart() {
 	return
 }
 
+
+// Hooks.PreStart
+func doHookPreStart() {
+	logWarning("CONF.Hooks.PreStart: launching hook:", CONF.Hooks.PreStart)
+	hookPreStart = false
+
+	doHook(CONF.Hooks.PreStart, "Local.Hooks.PreStart")
+	logNotice("CONF.Hooks.PreStart: done")
+	return
+}
+
+
 // Hooks.Stop
 func doHookStop() {
 	logWarning("CONF.Hooks.Stop: launching hook:", CONF.Hooks.Stop)
@@ -1308,6 +1368,34 @@ func doHookStop() {
 	return
 }
 
+
+func workerRequired(worker string) {
+	cmd := &Command {
+		id: "workerRequired",
+		use_shell: true,
+		timeout: 0,
+		max_reply: 16384,
+		command: worker,
+	}
+	execResult_ := execCommand(cmd)
+	if ! interrupt {
+		panic(fmt.Errorf("workerRequired: %s exited with code=%d, stderr=%s", worker, execResult_.Status, string(execResult_.StdErr)))
+	}
+}
+
+
+func workerTest() (ok bool) {
+	cmd := &Command {
+		id: "workerTest",
+		use_shell: true,
+		timeout: 1,
+		max_reply: 16384,
+		command: CONF.Workers.Test,
+	}
+	execResult_ := execCommand(cmd)
+	logDebug(fmt.Sprintf("workerTest: Exited code=%d, stdout=%s, stderr=%s", execResult_.Status, string(execResult_.StdOut), string(execResult_.StdErr)))
+	return execResult_.Status == 0
+}
 
 // Parse given config. Panic on errors: config MUST be clear for such a daemon.
 // !!! "--test" CLI key must be realized to check syntax before daemon reloading.
@@ -1330,6 +1418,8 @@ func parseConfigFile() (*Config) {
 	conf.Produce.RetryBackoff = 10
 	conf.Produce.RetryMax = 8640 // !!! 10^4 takes about 1MB of RSS, because sarama fills some linear structure to do !!!
 	conf.Produce.Respawn = -1 // Default to use Kafka.KeepAlive
+	conf.Workers.TestDelay = 10
+	conf.Workers.TestAttempts = 10
 
 	if env_config, ok := os.LookupEnv("CONFIG"); ok {
 		*config_path = env_config
@@ -1510,6 +1600,11 @@ func parseConfigFile() (*Config) {
 		logInfo("Config: Stop-offset for topic:", key, "=", value)
 	}
 
+
+	if len(conf.Hooks.PreStart) > 0 {
+		hookPreStart = true
+	}
+
 	if len(conf.Hooks.Start) > 0 {
 		hookStart = true
 	}
@@ -1518,6 +1613,7 @@ func parseConfigFile() (*Config) {
 		hookStop = true
 	}
 
+	conf.Path = *config_path
 	return conf
 }
 
@@ -1537,7 +1633,7 @@ func (f *fakeClock) Now() time.Time {
 func mutEx () {
 
 	var err = errors.New("")
-	hash := fmt.Sprintf("%x", sha1.Sum([]byte(os.Args[0])))
+	hash := fmt.Sprintf("%x", sha1.Sum([]byte(CONF.Path)))
 	hash = "X" + hash[1:]
 	logDebug("Init: acquiring global IPC mutex. ID = " + hash)
 
@@ -1566,7 +1662,12 @@ func main() {
 
 	defer func() { // Report panic, if one occured
 		 if r := recover(); r != nil {
+			interrupt = true
 		 	logEmerg(r)
+			if len(CONF.Workers.Required) > 0 {
+				logInfo("Waiting for workers to be terminated...")
+				waitWorkers.Wait()
+			}
 		 }
 	}()
 
@@ -1591,17 +1692,41 @@ func main() {
 		LOG_LEVEL = syslog.LOG_WARNING
 	}
 
+// Config
+	CONF = parseConfigFile()
 // Global mutex
 	mutEx()
 	defer MUTEX.Release()
-// Config
-	CONF = parseConfigFile()
 /*/////////////////////////////////////////////////////////
 // zookeeper test
 	m := []byte("test\nvalue")
 	zooWrite([]string{"knot1","test"}, m)
   /////////////////////////////////////////////////////////
 */
+	if hookPreStart {
+		doHookPreStart()
+	}
+
+    waitWorkers = &sync.WaitGroup{}
+	for _, worker := range CONF.Workers.Required {
+		go workerRequired(worker)
+		waitWorkers.Add(1)
+	}
+	if len(CONF.Workers.Test) > 0 {
+		testOk := false
+		logInfo("Testing workers...")
+		timeout := time.Second * time.Duration(CONF.Workers.TestDelay) / time.Duration(CONF.Workers.TestAttempts)
+		for i := 0; i < CONF.Workers.TestAttempts; i++ {
+			time.Sleep(timeout)
+			if workerTest() {
+				testOk = true
+				break
+			}
+		}
+		if ! testOk {
+			panic(fmt.Errorf("Init error: Workers.Test failed all the attempts"))
+		}
+	}
 
 	// KAFKA
 	if *DEBUG { // Log sarama output
@@ -1824,6 +1949,7 @@ func main() {
 //				doneCh <- struct{}{}
 			case exitSignal = <-signals:
 				logWarning("Interrupt is detected:", exitSignal)
+				interrupt = true
 				doneCh <- struct{}{}
 			}
 		}
@@ -1834,4 +1960,8 @@ func main() {
 	<-doneCh
 	logInfo("Processed", msgCount, "messages")
 
+	if len(CONF.Workers.Required) > 0 {
+		logInfo("Waiting for workers to be terminated...")
+		waitWorkers.Wait()
+	}
 }
