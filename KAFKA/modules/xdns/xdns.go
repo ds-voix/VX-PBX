@@ -20,7 +20,7 @@ type Msg dns.Msg
 
 // Callback func
 type NsUpdate func(query *string, zone *string, id uint16) (Rcode int)
-type NsProxy func(query *dns.Msg, zone *string) (answer *dns.Msg)
+type NsProxy func(query *dns.Msg, zone *string, tsig map[string]string) (answer *dns.Msg)
 
 const (
 	BUF_LEN = (64 * 1024) - 1 // https://github.com/fanf2/bind-9/blob/master/bin/nsupdate/nsupdate.c
@@ -120,7 +120,7 @@ func SetACL(acl []string, ACL *([]net.IPNet)) (error) {
 func CheckACL(addr net.Addr) (bool) {
 	host, _, err := net.SplitHostPort(addr.String())
 	if err != nil { // WTF?
-		xl.Debug("CheckACL: invalid addr:", err.Error())
+		xl.Debug("CheckACL: invalid addr: " + err.Error())
 		return false
 	}
 	ip := net.ParseIP(host)
@@ -295,14 +295,14 @@ func checkTSIG(w dns.ResponseWriter, r *dns.Msg, m *dns.Msg) (string) {
 // TSIG errors MUST be returned inside r.Extra[0], together with RCODE = 9 (NOTAUTH).
 // TYPE TSIG (250: Transaction SIGnature) + https://tools.ietf.org/html/rfc3597
 			m.MsgHdr.Rcode = dns.RcodeNotAuth
-			m.Extra = append(m.Extra, r.Extra[0])
-            rr := m.Extra[len(m.Extra)-1].(*dns.TSIG)
-            rr.TimeSigned = uint64(time.Now().Unix())
-            rr.MACSize = 0
-            rr.MAC = ""
-            rr.Error = dns.RcodeBadKey
+			m.Extra = append(m.Extra, r.Extra[len(r.Extra)-1])
+			rr := m.Extra[len(m.Extra)-1].(*dns.TSIG)
+			rr.TimeSigned = uint64(time.Now().Unix())
+			rr.MACSize = 0
+			rr.MAC = ""
+			rr.Error = dns.RcodeBadKey
 
-			sig := r.Extra[0].Header().Name
+			sig := r.Extra[len(r.Extra)-1].Header().Name
 			if _, ok := HMAC[sig]; !ok {
 				xl.Warn(fmt.Sprintf("xdns.checkTSIG: TSIG \"%s\" KEY is unknown in query from ip = %s", sig, w.RemoteAddr().String()))
 			} else {
@@ -330,12 +330,46 @@ func checkTSIG(w dns.ResponseWriter, r *dns.Msg, m *dns.Msg) (string) {
 			    xl.Warn("xdns.checkTSIG: Error while sending response: " + err.Error())
 				return ""
 			}
-            m = nil  // WriteMsg() sets improper TSIG in such case
+			m = nil  // WriteMsg() sets improper TSIG in such case
 			return ""
 		}
 	}
 	xl.Warn("xdns.checkTSIG: Unsigned query from ip = " + w.RemoteAddr().String())
 	return ""
+}
+
+// TSIG is locally validated, but workers was returned the error (? WTF)
+// Fabriq the correct claim
+func tsigError(w dns.ResponseWriter, r *dns.Msg, m *dns.Msg) {
+// m.MsgHdr.Rcode contains the error
+	if m == nil || r == nil {
+		xl.Emerg("xdns.tsigError: Called with empty Msg! Query from ip = " + w.RemoteAddr().String())
+		return
+	}
+	if (m.MsgHdr.Rcode <= dns.RcodeNotZone) || (m.MsgHdr.Rcode >= dns.RcodeBadCookie) {
+		xl.Emerg("xdns.tsigError: Unable to deal with extra code in Msg! Query from ip = " + w.RemoteAddr().String())
+		return
+	}
+
+	m.Extra = append(m.Extra, r.Extra[0])
+	rr := m.Extra[len(m.Extra)-1].(*dns.TSIG)
+	rr.TimeSigned = uint64(time.Now().Unix())
+	rr.Error = uint16(m.MsgHdr.Rcode)
+
+	m.MsgHdr.Rcode = dns.RcodeNotAuth // TSIG error must return rcode = 9
+
+	data, err := m.Pack()
+	if err != nil {
+	    xl.Warn("xdns.tsigError: Error while packing response: " + err.Error())
+		return
+	}
+	_, err = w.Write(data) // Note, the response is unsigned in this case! But dns.TsigGenerate() must be rewritten to sign errors.
+	if err != nil {
+	    xl.Warn("xdns.tsigError: Error while sending response: " + err.Error())
+		return
+	}
+	m = nil  // WriteMsg() sets improper TSIG in such case
+	return
 }
 
 func serve(w dns.ResponseWriter, r *dns.Msg) {
@@ -346,16 +380,22 @@ func serve(w dns.ResponseWriter, r *dns.Msg) {
 	var sig_name string
 	var sig_algo string
 
+	defer func() { // Report panic, if one occured
+		 if r := recover(); r != nil {
+		 	xl.Critf("xdns.serve: %v", r)
+		 }
+	}()
+
 	InitMsg := func(rcode int) {
 	    m = new(dns.Msg)
 		m.SetReply(r)
 		m.MsgHdr.Rcode = rcode
 	}
 	defer func() {
-	    if sig_name != "" {
-			m.SetTsig(sig_name, sig_algo, 300, time.Now().Unix())
-		}
 		if m != nil {
+		    if sig_name != "" {
+				m.SetTsig(sig_name, sig_algo, 300, time.Now().Unix())
+			}
 			w.WriteMsg(m)
 		}
 	}()
@@ -374,17 +414,16 @@ func serve(w dns.ResponseWriter, r *dns.Msg) {
 		}
 		zone := r.Question[0].Name
 		// XFR? Check signature first. https://tools.ietf.org/html/rfc5936
-		// !!! 2020/06/18 15:03:04 DEBUG: nsproxy #21902: Error querying nameserver xxx-dnsd1.bri.local:53: dns: no secrets defined
-		// TSIG >> proxy ???
 		if r.Question[0].Qtype == dns.TypeAXFR || r.Question[0].Qtype == dns.TypeIXFR {
 		    InitMsg(dns.RcodeRefused)
-			sig_name = checkTSIG(w, r, m)
-			if sig_name == "" { return }
+			sig := checkTSIG(w, r, m)
+			if sig == "" { return } // TSIG will be added at nsproxy(), so keep sig_name empty
 			sig_algo = r.Extra[len(r.Extra)-1].(*dns.TSIG).Algorithm
 			xl.Info(fmt.Sprintf("xdns.serve: XFR requested for zone %s from ip = %s", zone, w.RemoteAddr().String()))
+			m = nsproxy(r, &zone, map[string]string{sig: HMAC[sig]})
+		} else {
+			m = nsproxy(r, &zone, nil)
 		}
-
-		m = nsproxy(r, &zone)
 		if m == nil {
 		    InitMsg(dns.RcodeRefused)
 			xl.Error("xdns.serve: nsproxy returned NULL pointer!")
@@ -413,6 +452,9 @@ func serve(w dns.ResponseWriter, r *dns.Msg) {
 	}
 	query = fmt.Sprintf("key %s %s\n", sig_name, HMAC[sig_name]) + query
 	m.MsgHdr.Rcode = nsupdater(&query, &zone, r.MsgHdr.Id)
+	if m.MsgHdr.Rcode > dns.RcodeNotZone {
+		tsigError(w, r, m)
+	}
 	xl.Debug(fmt.Sprintf("xdns.serve #%d: Answer code = %d, TSIG = \"%s\"", r.MsgHdr.Id, m.MsgHdr.Rcode, sig_name))
 }
 
@@ -436,12 +478,12 @@ func Init(ListenTCP string, ListenUDP string, callback_update NsUpdate, callback
 func Start() {
 	go func() {
 		if err := udpServer.ListenAndServe(); err != nil {
-			xl.Emerg(err)
+			xl.Emerg(err.Error())
 		}
 	}()
 	go func() {
 		if err := tcpServer.ListenAndServe(); err != nil {
-			xl.Emerg(err)
+			xl.Emerg(err.Error())
 		}
 	}()
 }
