@@ -250,6 +250,7 @@ var (
     // Coordinate exit on signal: don't try to process the rest of messages in batch
 	interrupt bool
 	waitWorkers *sync.WaitGroup
+	workerDead chan struct{}
 
 	// Syslog logger
 	SYSLOG *syslog.Writer
@@ -336,6 +337,12 @@ func execCommand(c *Command) (*ExecResult) {
 	r := &ExecResult{ID: c.id,
 					Command: c.command,
 					Args: c.args}
+	if interrupt && (c.id != "hook") { // Stop executing regular commands on interrupt
+		logWarning("execCommand: interrupt!")
+		r.Status = -1
+		r.StdErr = []byte("execCommand: interrupted!")
+		return r
+	}
 	cmd := exec.Command(c.command)
 	if c.use_shell { // Pack into bash environment (In fact, bash is *sh's mainstream. And I unwill to deep into specifics)
 		cmd = exec.Command("/bin/bash")
@@ -991,6 +998,10 @@ func zooWrite(path []string, value []byte) (ERROR string) {
 
 // Void commitOffset() must panic on error, avoiding inconsistency
 func commitOffset(topic string, offset int64) () {
+	if interrupt {
+		logWarning("commitOffset: interrupt!")
+		return
+	}
 	OFFSETS[topic] = offset  // Update local offsets map. E.g. to check HookStart.
 
 	if err := os.Rename(CONF.Consume.LocalDirectory + topic + ".offset", CONF.Consume.LocalDirectory + topic + ".offset.old"); err != nil {
@@ -1033,6 +1044,7 @@ func consume(topics []string, master sarama.Consumer) (chan *sarama.ConsumerMess
 		go func(topic string, consumer sarama.PartitionConsumer) {
 			for {
 				if interrupt {
+					logWarning("consume: interrupt!")
 					return
 				}
 				select {
@@ -1272,6 +1284,7 @@ func processMessage(msg *sarama.ConsumerMessage) { // https://godoc.org/github.c
 		}
 	}
 
+	logInfo(fmt.Sprintf("processMessage: done [%s](%d):%d producer=\"%s\" tag=\"%s\"", msg.Topic, msg.Partition, msg.Offset, COMMANDS.producer, COMMANDS.tag))
 	return
 }
 
@@ -1377,9 +1390,13 @@ func workerRequired(worker string) {
 		max_reply: 16384,
 		command: worker,
 	}
+
 	execResult_ := execCommand(cmd)
 	if ! interrupt {
-		panic(fmt.Errorf("workerRequired: %s exited with code=%d, stderr=%s", worker, execResult_.Status, string(execResult_.StdErr)))
+		interrupt = true
+//		panic(fmt.Errorf("workerRequired: %s exited with code=%d, stderr=%s", worker, execResult_.Status, string(execResult_.StdErr)))
+		logEmerg(fmt.Errorf("workerRequired: %s exited with code=%d, stderr=%s", worker, execResult_.Status, string(execResult_.StdErr)))
+		workerDead <- struct{}{}
 	}
 }
 
@@ -1664,7 +1681,7 @@ func main() {
 		 if r := recover(); r != nil {
 			interrupt = true
 		 	logEmerg(r)
-			if len(CONF.Workers.Required) > 0 {
+			if (CONF != nil) && (len(CONF.Workers.Required) > 0) {
 				logInfo("Waiting for workers to be terminated...")
 				waitWorkers.Wait()
 			}
@@ -1708,9 +1725,12 @@ func main() {
 	}
 
     waitWorkers = &sync.WaitGroup{}
-	for _, worker := range CONF.Workers.Required {
-		go workerRequired(worker)
-		waitWorkers.Add(1)
+    if len(CONF.Workers.Required) > 0 {
+	    workerDead = make(chan struct{}, len(CONF.Workers.Required))
+		for _, worker := range CONF.Workers.Required {
+			go workerRequired(worker)
+			waitWorkers.Add(1)
+		}
 	}
 	if len(CONF.Workers.Test) > 0 {
 		testOk := false
@@ -1718,6 +1738,7 @@ func main() {
 		timeout := time.Second * time.Duration(CONF.Workers.TestDelay) / time.Duration(CONF.Workers.TestAttempts)
 		for i := 0; i < CONF.Workers.TestAttempts; i++ {
 			time.Sleep(timeout)
+			if interrupt { break }
 			if workerTest() {
 				testOk = true
 				break
@@ -1950,6 +1971,8 @@ func main() {
 			case exitSignal = <-signals:
 				logWarning("Interrupt is detected:", exitSignal)
 				interrupt = true
+				doneCh <- struct{}{}
+			case <- workerDead:
 				doneCh <- struct{}{}
 			}
 		}
