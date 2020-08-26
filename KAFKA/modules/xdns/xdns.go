@@ -19,7 +19,7 @@ import (
 type Msg dns.Msg
 
 // Callback func
-type NsUpdate func(query *string, zone *string, id uint16) (Rcode int)
+type NsUpdate func(query *string, zone *string, id uint16, sig_name *string, ipaddr *string) (Rcode int)
 type NsProxy func(query *dns.Msg, zone *string, tsig map[string]string) (answer *dns.Msg)
 
 const (
@@ -451,7 +451,8 @@ func serve(w dns.ResponseWriter, r *dns.Msg) {
 		return
 	}
 	query = fmt.Sprintf("key %s %s\n", sig_name, HMAC[sig_name]) + query
-	m.MsgHdr.Rcode = nsupdater(&query, &zone, r.MsgHdr.Id)
+	ipaddr := w.RemoteAddr().String()
+	m.MsgHdr.Rcode = nsupdater(&query, &zone, r.MsgHdr.Id, &sig_name, &ipaddr)
 	if m.MsgHdr.Rcode > dns.RcodeNotZone {
 		tsigError(w, r, m)
 	}

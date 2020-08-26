@@ -111,6 +111,13 @@ func (r *Reports) Get(uuid string, index int) (Report, error) {
 	return Report{}, errors.New("Empty pool[uuid]")
 }
 
+func (r *Reports) Del(uuid string) {
+    if r == nil { return }
+	r.Lock()
+	defer r.Unlock()
+	delete(r.pool, uuid)
+}
+
 func (r *Reports) Clean(age time.Duration) {
     if r == nil { return }
 	r.Lock()

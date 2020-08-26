@@ -237,6 +237,7 @@ var (
 	client sarama.Client
 	PRODUCER sarama.SyncProducer
 	PRODUCER_AGE time.Time
+	mu sync.Mutex // PRODUCER respawning must be exclusive
 
 	CAcert []byte
 	privateKey []byte
@@ -1140,6 +1141,7 @@ func produceExecReport(COMMANDS *Commands, RESULTS *ExecResults, message *sarama
 		return
 	}
 
+	mu.Lock() // +
 	if CONF.Produce.Respawn > 0 { // Respawn stolen producer
 		if now.Sub(PRODUCER_AGE) >= time.Duration(CONF.Produce.Respawn) * time.Second { // "write: broken pipe" on producer, keepAlive does not works
 			logInfo("Respawing producer...")
@@ -1155,9 +1157,13 @@ func produceExecReport(COMMANDS *Commands, RESULTS *ExecResults, message *sarama
 			}
 		}
 	}
+	mu.Unlock() // -
+
 	msg.Value = sarama.StringEncoder(report_)
 	partition, offset, err := PRODUCER.SendMessage(msg)
+	mu.Lock() // +
 	PRODUCER_AGE = time.Now()
+	mu.Unlock() // -
 	if err != nil {
 		// Try to leave local copy of last report before aborting
 		report_file := fmt.Sprintf("%s/%s:%d:%d.crash", CONF.Consume.LocalDirectory, message.Topic,  message.Partition, message.Offset)
@@ -1245,11 +1251,18 @@ func processMessage(msg *sarama.ConsumerMessage) { // https://godoc.org/github.c
 		}
 	}
 
-	if COMMANDS.execTTL > 0 {
+	if COMMANDS.execTTL > 0 { // Don't execute outdated commands
 		now = time.Now()
 		if now.Sub(COMMANDS.timestamp) >= time.Duration(COMMANDS.execTTL) * time.Second {
 			defer commitOffset(msg.Topic, msg.Offset + 1) // Offset must be incremented only after processMessage()
-			logDebug("processMessage: Skip execTTL")
+			logDebug("processMessage: Skip execTTL (outdated)")
+			return
+		}
+	} else if COMMANDS.execTTL < 0 { // In the opposite, execute commands only in case the execTTL is outdated
+		now = time.Now()
+		if now.Sub(COMMANDS.timestamp) <= time.Duration(-1 * COMMANDS.execTTL) * time.Second {
+			defer commitOffset(msg.Topic, msg.Offset + 1) // Offset must be incremented only after processMessage()
+			logDebug("processMessage: Skip negative execTTL (not yet outdated)")
 			return
 		}
 	}
@@ -1963,7 +1976,7 @@ func main() {
 				if hookStart {
 					doHookStart()
 				}
-				debug.FreeOSMemory()
+//				debug.FreeOSMemory()
 			case consumerError := <-errors:
 				msgCount++
 				logErr("Received consumerError ", string(consumerError.Topic), string(consumerError.Partition), consumerError.Err)
