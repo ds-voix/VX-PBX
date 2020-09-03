@@ -287,7 +287,7 @@ func checkTSIG(w dns.ResponseWriter, r *dns.Msg, m *dns.Msg) (string) {
 				return ""
 			}
 
-			xl.Debug(fmt.Sprintf("xdns.checkTSIG #%d: Query TSIG = \"%s\"", r.MsgHdr.Id, sig_name))
+			xl.Debugf("xdns.checkTSIG #%d: Query TSIG = \"%s\"", r.MsgHdr.Id, sig_name)
 			return sig_name
 		} else {
 			// *Msg r has an TSIG records and it was not validated
@@ -304,10 +304,10 @@ func checkTSIG(w dns.ResponseWriter, r *dns.Msg, m *dns.Msg) (string) {
 
 			sig := r.Extra[len(r.Extra)-1].Header().Name
 			if _, ok := HMAC[sig]; !ok {
-				xl.Warn(fmt.Sprintf("xdns.checkTSIG: TSIG \"%s\" KEY is unknown in query from ip = %s", sig, w.RemoteAddr().String()))
+				xl.Warnf("xdns.checkTSIG: TSIG \"%s\" KEY is unknown in query from ip = %s", sig, w.RemoteAddr().String())
 			} else {
 	            rr.Error = dns.RcodeBadSig
-				xl.Warn(fmt.Sprintf("xdns.checkTSIG: TSIG \"%s\" HMAC is invalid in query from ip = %s", sig, w.RemoteAddr().String()))
+				xl.Warnf("xdns.checkTSIG: TSIG \"%s\" HMAC is invalid in query from ip = %s", sig, w.RemoteAddr().String())
 			}
 
 			switch dns.CanonicalName(rr.Algorithm) {
@@ -317,7 +317,7 @@ func checkTSIG(w dns.ResponseWriter, r *dns.Msg, m *dns.Msg) (string) {
 			case dns.HmacSHA512:
 			default:
 	            rr.Error = dns.RcodeBadAlg
-				xl.Warn(fmt.Sprintf("xdns.checkTSIG: TSIG \"%s\" with unknown algorithm \"%s\" in query from ip = %s", sig, rr.Algorithm, w.RemoteAddr().String()))
+				xl.Warnf("xdns.checkTSIG: TSIG \"%s\" with unknown algorithm \"%s\" in query from ip = %s", sig, rr.Algorithm, w.RemoteAddr().String())
 			}
 
 			data, err := m.Pack()
@@ -415,15 +415,27 @@ func serve(w dns.ResponseWriter, r *dns.Msg) {
 		zone := r.Question[0].Name
 		// XFR? Check signature first. https://tools.ietf.org/html/rfc5936
 		if r.Question[0].Qtype == dns.TypeAXFR || r.Question[0].Qtype == dns.TypeIXFR {
-		    InitMsg(dns.RcodeRefused)
+			// TSIG is mandatory
+			InitMsg(dns.RcodeRefused)
 			sig := checkTSIG(w, r, m)
 			if sig == "" { return } // TSIG will be added at nsproxy(), so keep sig_name empty
 			sig_algo = r.Extra[len(r.Extra)-1].(*dns.TSIG).Algorithm
-			xl.Info(fmt.Sprintf("xdns.serve: XFR requested for zone %s from ip = %s", zone, w.RemoteAddr().String()))
+			xl.Infof("xdns.serve #%d: XFR requested for zone %s from ip = %s", r.MsgHdr.Id, zone, w.RemoteAddr().String())
 			m = nsproxy(r, &zone, map[string]string{sig: HMAC[sig]})
 		} else {
-			m = nsproxy(r, &zone, nil)
+			// TSIG is optional
+			if r.IsTsig() != nil {
+				InitMsg(dns.RcodeRefused)
+				sig := checkTSIG(w, r, m)
+				if sig == "" { return } // TSIG will be added at nsproxy(), so keep sig_name empty
+				sig_algo = r.Extra[len(r.Extra)-1].(*dns.TSIG).Algorithm
+				xl.Infof("xdns.serve #%d: Sined query for zone %s from ip = %s", r.MsgHdr.Id, zone, w.RemoteAddr().String())
+				m = nsproxy(r, &zone, map[string]string{sig: HMAC[sig]})
+			} else {
+				m = nsproxy(r, &zone, nil)
+			}
 		}
+
 		if m == nil {
 		    InitMsg(dns.RcodeRefused)
 			xl.Error("xdns.serve: nsproxy returned NULL pointer!")
@@ -443,11 +455,11 @@ func serve(w dns.ResponseWriter, r *dns.Msg) {
 	if sig_name == "" { return }
 	sig_algo = r.Extra[len(r.Extra)-1].(*dns.TSIG).Algorithm
 
-	xl.Debug(fmt.Sprintf("xdns.serve #%d: Query TSIG = \"%s\"", r.MsgHdr.Id, sig_name))
+	xl.Debugf("xdns.serve #%d: Query TSIG = \"%s\"", r.MsgHdr.Id, sig_name)
 	query, zone, err := nsupdate(r)
 	if err != nil {
 		m.MsgHdr.Rcode = dns.RcodeFormatError
-		xl.Warn(fmt.Sprintf("xdns.serve: nsupdate #%d zone = %s, err = %s :: %s", r.MsgHdr.Id, zone, query, err.Error()))
+		xl.Warnf("xdns.serve: nsupdate #%d zone = %s, err = %s :: %s", r.MsgHdr.Id, zone, query, err.Error())
 		return
 	}
 	query = fmt.Sprintf("key %s %s\n", sig_name, HMAC[sig_name]) + query
@@ -456,7 +468,7 @@ func serve(w dns.ResponseWriter, r *dns.Msg) {
 	if m.MsgHdr.Rcode > dns.RcodeNotZone {
 		tsigError(w, r, m)
 	}
-	xl.Debug(fmt.Sprintf("xdns.serve #%d: Answer code = %d, TSIG = \"%s\"", r.MsgHdr.Id, m.MsgHdr.Rcode, sig_name))
+	xl.Debugf("xdns.serve #%d: Answer code = %d, TSIG = \"%s\"", r.MsgHdr.Id, m.MsgHdr.Rcode, sig_name)
 }
 
 
