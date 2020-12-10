@@ -13,7 +13,8 @@ import (
 
 const (
 	DAEMON_NAME = "xswitcher"
-	CONFIG_PATH = "~/.config/xswitcher/xswitcher.conf"
+//	CONFIG_PATH = "~/.config/xswitcher/xswitcher.conf" // This is in fact the dumb solution to use users home, because the user is *root*.
+	CONFIG_PATH = "/etc/xswitcher/xswitcher.conf"
 )
 
 // Config in TOML
