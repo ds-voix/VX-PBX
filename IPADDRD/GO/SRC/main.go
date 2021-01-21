@@ -1,7 +1,7 @@
 package main
 
 /*
- ipaddr-collector v0.2
+ ipaddr-collector v0.5
 
 /////////////////////////////////////////////////////////////////////////////
  Copyright (C) 2020 Dmitry Svyatogorov ds@vo-ix.ru
@@ -22,15 +22,19 @@ package main
 */
 
 import (
+	"execd/xlog"
+
 	"fmt"
-	"log"
-	"log/syslog"
+//	"log"
+//	"log/syslog"
 	"net"
 	"os"
 	"os/signal"
 	"os/user"
 	"syscall"
+	"strings"
 	"strconv"
+	"sync"
 	"time"
 	"hash/crc32"
 	"github.com/google/uuid"
@@ -38,184 +42,161 @@ import (
 	flag "github.com/spf13/pflag"	// CLI keys like python's "argparse"
 	"github.com/sevlyar/go-daemon"	// goroutine-safe FORK through reborn() call
 									// WasReborn returns true in child process (daemon) and false in parent process.
+//	"runtime/pprof"
+//	"net/http"
+//	_ "net/http/pprof"
 )
 
+
 const (
-	BUF_LEN = 4096 + 64 + 1 + 4 + 4 + 16 // IP(max 4096) + hostname(max 64) + flag(1) + header(4) + crc32(4) + uuid(16)
+	BUF_LEN = 4096 + 64 + 1 + 4 + 4 + 16 // =4185  IP(max 4096) + hostname(max 64) + flag(1) + header(4) + crc32(4) + uuid(16)
 	IPv4 = 5
 	IPv6 = 17 // Lenght of ip records in frame
 )
 
+
+type BUF struct {
+	sync.RWMutex
+	in_use bool
+	data []byte
+}
+
+
 var (
+	DAEMON_NAME = "ipaddr-collector"
+
 	// Command line parser "pflag"
-    DEBUG = flag.BoolP("debug", "d", false, "Debug mode switch")
+	DEBUG = flag.BoolP("debug", "d", false, "Debug mode switch")
 	userName = flag.StringP("user", "u", "root", "Run daemon under this user")
 	groupName = flag.StringP("group", "g", "", "Run daemon under this group")
 
 	LISTEN = flag.StringP("listen", "l", ":3333", "Listen UDP IP:PORT")
 	// RRL. The simple one: on fixed window.
 	// Because there it is just an attack marker.
-    RRL_THRESHOLD = flag.IntP("rrl_threshold", "t", 1000, "RRL threshold (number of packets per window length)")
-    RRL_WINDOW = flag.IntP("rrl_window", "w", 1000, "RRL window, ms >=100")
-    RRL_FACTOR = flag.IntP("rrl_factor", "r", 10, "RRL factor, integer > 0")
+	RRL_THRESHOLD = flag.IntP("rrl_threshold", "t", 1000, "RRL threshold (number of packets per window length)")
+	RRL_WINDOW = flag.IntP("rrl_window", "w", 1000, "RRL window, ms >=100")
+	RRL_FACTOR = flag.IntP("rrl_factor", "r", 10, "RRL factor, integer > 0")
 	RRL_FILE = flag.StringP("rrl_file_name", "f", "RRL", "File to put RRL stats into (relative to temporary path)")
-    RRL_FILE_MAX = flag.Int64P("rrl_file_max", "m", 1024 * 1024, "RRL file maximum size, in bytes")
-    // Prefer to use tmpfs for reporting
+	RRL_FILE_MAX = flag.Int64P("rrl_file_max", "m", 1024 * 1024, "RRL file maximum size, in bytes")
+	// Prefer to use tmpfs for reporting
 	REPORT_PATH = flag.StringP("report_path", "p", "/run/ipaddrd/reports", "Store consistent reports under this path")
 	REPORT_PATH_NEW = flag.StringP("report_path_tmp", "P", "/run/ipaddrd/tmp", "Store ditry reports under this path")
 
-	// Syslog logger
-	SYSLOG *syslog.Writer
-	STDOUT *log.Logger
-	STDERR *log.Logger
-
-	// https://unix.superglobalmegacorp.com/Net2/newsrc/sys/syslog.h.html
-    LOG_LEVEL syslog.Priority = syslog.LOG_INFO // LOG_EMERG=0 .. LOG_DEBUG=7
+	xl xlog.XLog
+	// Ring of 100 receive buffers
+	RING [100]BUF
 )
 
 
-// void: Log to syslog/stdout/stderr, depending on settings
-func LOG(severity syslog.Priority, message_ ...interface{}) {
-    if severity > LOG_LEVEL { return }
-//    message := (strings.Trim(fmt.Sprint(message_...), "[]"))
-	message := fmt.Sprint(message_...)
-	message = message[1:]
-	message = message[:(len(message)-1)]
-
-    var err error
-	level := "DEBUG"
-	switch severity {
-		case syslog.LOG_EMERG:
-			level = "EMERG"
-		case syslog.LOG_ALERT:
-			level = "ALERT"
-		case syslog.LOG_CRIT:
-			level = "CRIT"
-		case syslog.LOG_ERR:
-			level = "ERR"
-		case syslog.LOG_WARNING:
-			level = "WARN"
-		case syslog.LOG_NOTICE:
-			level = "NOTICE"
-		case syslog.LOG_INFO:
-			level = "INFO"
-	}
-
-	if (DEBUG != nil && *DEBUG) || (SYSLOG == nil) {
-		if severity > syslog.LOG_WARNING {
-			STDERR.Printf("%s: %s", level, message)
-		} else {
-			STDOUT.Printf("%s: %s", level, message)
-		}
-	} else {
-		switch severity { // Double work, due to the absence of "syslog.Log(string, severity)"
-			case syslog.LOG_EMERG:
-				err = SYSLOG.Emerg(message)
-			case syslog.LOG_ALERT:
-				err = SYSLOG.Alert(message)
-			case syslog.LOG_CRIT:
-				err = SYSLOG.Crit(message)
-			case syslog.LOG_ERR:
-				err = SYSLOG.Err(message)
-			case syslog.LOG_WARNING:
-				err = SYSLOG.Warning(message)
-			case syslog.LOG_NOTICE:
-				err = SYSLOG.Notice(message)
-			case syslog.LOG_INFO:
-				err = SYSLOG.Info(message)
-			default:
-				err = SYSLOG.Debug(message)
-		}
-		if err != nil {
-			STDERR.Printf("SYSLOG failed \"%s\" to write %s. Message was: \"%s\"", err.Error(), level, message)
-		}
-	}
-}
-
-// Unified log implementation. Less code >> more CPU.
-func logDebug (message ...interface{}) { LOG(syslog.LOG_DEBUG, message) }
-func logInfo (message ...interface{}) { LOG(syslog.LOG_INFO, message) }
-func logNotice (message ...interface{}) { LOG(syslog.LOG_NOTICE, message) }
-func logWarning (message ...interface{}) { LOG(syslog.LOG_WARNING, message) }
-func logErr (message ...interface{}) { LOG(syslog.LOG_ERR, message) }
-func logCrit (message ...interface{}) { LOG(syslog.LOG_CRIT, message) }
-func logAlert (message ...interface{}) { LOG(syslog.LOG_ALERT, message) }
-func logEmerg (message ...interface{}) { LOG(syslog.LOG_EMERG, message) }
-
-
-func serve(pc net.PacketConn, addr net.Addr, buf []byte) {
+func serve(addr net.Addr, BUFFER *BUF, buf_len uint32) {
 	var (
-		length int
+		pointer uint32 = 4 // First ip header in buf[] is at 5'th byte
 		ip net.IP
 		ipv4 []string
 		ipv6 []string
 		overhead bool
 		hostname string
 		frame_uuid uuid.UUID
+//		report strings.Builder
 	)
-	if length = int(buf[0]) | int(buf[1] << 8); length != len(buf) { return } // Invalid frame length
+	defer func() {
+	    BUFFER.Lock()
+		BUFFER.in_use = false
+		BUFFER.Unlock()
+	} ()
 
-	crc32_bytes := buf[length-4 :]
+//	buf := BUFFER.data
+	length := uint32(BUFFER.data[0]) | uint32(BUFFER.data[1]) << 8 // Lenght from header
+
+	if *DEBUG { xl.Debugf("head = %d %d %d %d", int(BUFFER.data[0]), int(BUFFER.data[1]), int(BUFFER.data[2]), int(BUFFER.data[3])) }
+
+	if length != buf_len { // Invalid frame length
+		if *DEBUG { xl.Debugf("Invalid frame length %d != %d", length, buf_len) }
+		return
+	}
+
+
+	crc32_bytes := BUFFER.data[length-4 :]
 	crc32_frame := uint32(crc32_bytes[0])
 	crc32_frame |= uint32(crc32_bytes[1]) << 8
 	crc32_frame |= uint32(crc32_bytes[2]) << 16
 	crc32_frame |= uint32(crc32_bytes[3]) << 24
-	if crc32.ChecksumIEEE(buf[:length - 4]) != crc32_frame { return } // Invalid CRC
+	if crc32.ChecksumIEEE(BUFFER.data[:length - 4]) != crc32_frame { // Invalid CRC
+		if *DEBUG { xl.Debug("Invalid CRC") }
+		return
+	}
 
-	ip_count := int(buf[2]) | int(buf[3] << 8)
-	if ip_count <= 0 || ip_count > 256 { return } // Don't proceed with too many/invalid ip counts
+	ip_count := uint32(BUFFER.data[2]) | uint32(BUFFER.data[3]) << 8
+	if ip_count <= 0 || ip_count > 256 { // Don't proceed with too many/invalid ip counts
+		if *DEBUG { xl.Debugf("More than 256 ip in header: %d", ip_count) }
+		return
+	}
 
-	pointer := 4 // First ip header in buf[] is at 5'th byte
-	for i := 0; i < ip_count; i++ {
-		head := buf[pointer]
+	for i := uint32(0); i < ip_count; i++ {
+		head := BUFFER.data[pointer]
 		if (head & 1) == 0 { // IPv4
-			if length <= pointer + IPv4 + 7 { return } // Out of buffer! (7 = flag + min_hostname + crc)
-			ip = buf[pointer+1 : pointer+IPv4]
-			ipv4 = append(ipv4, fmt.Sprintf("%b %s", (head >> 1), ip.String()))
+			if pointer + IPv4 + 7 >= length { // Out of buffer! (7 = flag + min_hostname + crc)
+				if *DEBUG { xl.Debug("Malformed frame: pointer went out of buffer!") }
+				return
+			}
+			ip = BUFFER.data[pointer+1 : pointer+IPv4]
+//			ipv4 = append(ipv4, fmt.Sprintf("%b %s", (head >> 1), ip.String()))
+			ipv4 = append(ipv4, strconv.FormatInt(int64(head >> 1), 2) + " " + ip.String())
 
 //	    	log.Printf("v4 %b = %s", head, ip.String())
 			pointer += IPv4;
 		} else { // IPv6
-			if length <= pointer + IPv6 + 7 { return } // Out of buffer!
-			ip = buf[pointer+1 : pointer+IPv6]
+			if pointer + IPv6 + 7 >= length { // Out of buffer! (7 = flag + min_hostname + crc)
+				if *DEBUG { xl.Debug("Malformed frame: pointer went out of buffer!") }
+				return
+			}
+			ip = BUFFER.data[pointer+1 : pointer+IPv6]
 			ipv6 = append(ipv6, fmt.Sprintf("%b %s", (head >> 1), ip.String()))
 
 //	    	log.Printf("v6 %b = %s", head, ip.String())
 			pointer += IPv6;
 		}
 	}
-    if buf[pointer] > 1 { return } // Invalid "overhead" flag
-	overhead = (buf[pointer] == 1)
-	hostname = fmt.Sprintf("%s", buf[pointer+1 : length-4-16])
-	frame_uuid, _ = uuid.FromBytes(buf[length-4-16 : length-4])
+    if BUFFER.data[pointer] > 1 { // Invalid "overhead" flag
+		if *DEBUG { xl.Debug("Invalid \"overhead\" flag in frame") }
+		return
+	}
+	overhead = (BUFFER.data[pointer] == 1)
+	hostname = fmt.Sprintf("%s", BUFFER.data[pointer+1 : length-4-16])
+	frame_uuid, _ = uuid.FromBytes(BUFFER.data[length-4-16 : length-4])
 
 	report_file := *REPORT_PATH_NEW + "/" + frame_uuid.String()
-	f, err := os.OpenFile(report_file, os.O_RDWR|os.O_CREATE, 0640)
+	f, err := os.OpenFile(report_file, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0640) // O_EXCL: file must not exist
 	if err != nil {
-		panic(fmt.Errorf("%s Error: %s", report_file, err.Error()))
+		os.Remove(report_file)
+		f, err = os.OpenFile(report_file, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0640) // O_EXCL: file must not exist
+		if err != nil { // WTF!?
+			xl.Emergf("%s Error: %s", report_file, err.Error())
+			panic(fmt.Errorf("%s Error: %s", report_file, err.Error()))
+		}
 	}
-	defer f.Close()
 
-	report := fmt.Sprintf("addr=%s\nhost=%s\n", addr.String(), hostname)
+	defer func() {
+//		f.WriteString(report.String())
+		f.Sync()
+		f.Close()
+//		time.Sleep(100 * time.Millisecond)
+// !! Rename() found not been atomic. At least, on tmpfs. Renamed file may still not exist, while old file already been removed.
+		os.Rename(report_file, *REPORT_PATH + "/" + frame_uuid.String())
+	} ()
+
+	f.WriteString(fmt.Sprintf("addr=%s\nhost=%s\n", addr.String(), hostname))
 	if overhead {
-		report += "overhead\n"
+		f.WriteString("overhead\n")
 	}
 
 	for i := 0; i < len(ipv4); i++ {
-		report += fmt.Sprintf("v4=%s\n", ipv4[i])
+		f.WriteString(fmt.Sprintf("v4=%s\n", ipv4[i]))
 	}
 
 	for i := 0; i < len(ipv6); i++ {
-		report += fmt.Sprintf("v6=%s\n", ipv6[i])
+		f.WriteString(fmt.Sprintf("v6=%s\n", ipv6[i]))
 	}
-
-	f.WriteString(report)
-	os.Rename(report_file, *REPORT_PATH + "/" + frame_uuid.String())
-
-//	log.Printf("v4 %s", ipv4)
-//	log.Printf("v6 %s", ipv6)
-//  log.Printf("addr=%s len=%d hostname=\"%s\", %t, uuid=%s", addr.String(), len(buf), hostname, overhead, frame_uuid.String())
-
 }
 
 
@@ -228,24 +209,38 @@ func listen_udp() {
 		}
 	}()
 
+/* Doesn't work
+	// CPU profiling
+	pr, _ := os.Create("/run/ipaddrd/cpuprofile")
+	defer pr.Close()
+	pprof.StartCPUProfile(pr)
+	defer pprof.StopCPUProfile()
+*/
+
     RRL_WINDOW_MS := time.Millisecond * time.Duration(*RRL_WINDOW)
 
 	// Listen to incoming udp packets. !!! 1 thread!
 	pc, err := net.ListenPacket("udp", *LISTEN)
 	if err != nil {
-		logEmerg(err)
+	 	xl.Emergf("%v", err)
 	}
 	defer pc.Close()
 
-	logInfo(fmt.Sprintf("Listening on address: \"%s\"", *LISTEN))
+	xl.Infof("Listening on address: \"%s\"", *LISTEN)
 
 	t0 := time.Now()
 	count := 0
 	rrl := 0
 
+	for i:=0; i<100; i++ {
+		RING[i].data = make([]byte, BUF_LEN)
+		RING[i].in_use = false
+	}
+	ring_pos := 0 // Pointer to current buffer in the RING
+
 	for {
-		buf := make([]byte, BUF_LEN)
-		n, addr, err := pc.ReadFrom(buf)
+//		buf := make([]byte, BUF_LEN)
+		n, addr, err := pc.ReadFrom(RING[ring_pos].data)
 		if err != nil {
 			continue
 		}
@@ -258,7 +253,7 @@ func listen_udp() {
 		count += 1
 		if count > *RRL_THRESHOLD { // RRL
 			if rrl == 0 {
-				logWarning("RRL activated!")
+				xl.Warning("RRL activated!")
 				report := *REPORT_PATH_NEW + "/" + *RRL_FILE
 				fi, err := os.Stat(report);
 				if err == nil {
@@ -285,7 +280,22 @@ func listen_udp() {
 		    f.WriteString(addr.String() + "\n")
 
 		}
-		go serve(pc, addr, buf[:n])
+
+		RING[ring_pos].in_use = true // No need in Lock(), we are inside of the single loop.
+		go serve(addr, &(RING[ring_pos]), uint32(n))
+		ring_pos++ // Unlike C, "++" can't be inlined
+		if ring_pos > 99 { ring_pos = 0 }
+		in_use := false
+		for { // Wait the next buffer to be released, if not already is.
+			RING[ring_pos].RLock()
+			in_use = RING[ring_pos].in_use
+			RING[ring_pos].RUnlock()
+			if in_use { // Wait
+			    time.Sleep(10 * time.Millisecond)
+				continue
+			}
+			break
+		}
 	}
 
 	return
@@ -304,18 +314,44 @@ func main() {
 //    DEBUG = &FALSE
 
 	// Initialize logging pathes
-	SYSLOG, err = syslog.New(syslog.LOG_DEBUG | syslog.LOG_DAEMON, "ipaddr-collector") // M.b. NULL pointer, in case of some error
-	STDOUT = log.New(os.Stdout, "", log.LstdFlags)
-	STDERR = log.New(os.Stderr, "", log.LstdFlags)
+	xl = xlog.New(DAEMON_NAME)
 
 	defer func() { // Report panic, if one occured
-		if r := recover(); r != nil {
-			logEmerg(r)
+		 if r := recover(); r != nil {
+		 	xl.Emergf("%v", r)
 		 }
 	}()
 
+   	if env_log, ok := os.LookupEnv("LOG"); ok {
+		switch strings.ToUpper(env_log) {
+			case "DEBUG":
+				xl.LOG_LEVEL = xlog.LOG_DEBUG
+				d := true
+				xl.DEBUG = &d
+			case "INFO":
+				xl.LOG_LEVEL = xlog.LOG_INFO
+			case "NOTICE":
+				xl.LOG_LEVEL = xlog.LOG_NOTICE
+			case "ERR":
+				xl.LOG_LEVEL = xlog.LOG_ERR
+			case "CRIT":
+				xl.LOG_LEVEL = xlog.LOG_CRIT
+			default:
+				xl.LOG_LEVEL = xlog.LOG_WARNING
+		}
+	} else {
+		xl.LOG_LEVEL = xlog.LOG_INFO
+	}
+
+
 //  flag.CommandLine.AddGoFlagSet(goflag.CommandLine)
 	flag.Parse()
+	if *DEBUG {
+		xl.LOG_LEVEL = xlog.LOG_DEBUG
+		d := true
+		xl.DEBUG = &d
+	}
+
     if *RRL_THRESHOLD < 1 {
 		panic(fmt.Errorf("RRL threshold must be >0, but is \"%d\"", *RRL_THRESHOLD))
     }
@@ -396,9 +432,10 @@ func main() {
 	c := make(chan os.Signal)
 	signal.Notify(c, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
-		logInfo(fmt.Sprintf("Exitting by signal: \"%v\"", <-c))
+		xl.Infof("Exitting by signal: \"%v\"", <-c)
 		os.Exit(0)
 	} ()
 
+//	go http.ListenAndServe(":8080", nil)
 	listen_udp()
 }
