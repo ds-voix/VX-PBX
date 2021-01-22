@@ -1,16 +1,24 @@
 #!/bin/bash
 # Find IP duplicates in collected reports
 DIR="/run/ipaddrd"
-DIR_R="/run/ipaddrd/reports"
+DIR_NEW="/run/ipaddrd/reports"
+DIR_R="/run/ipaddrd/reports.snap" # Bufferized DIR_NEW
 FILE_RRL="/run/ipaddrd/tmp/RRL"
 
 PROC=`basename $0`
 mail="root"
 
+# Comma-separated CIDR list of ignoring networks.
+# Duplicates inside such a networks will be silently ignored.
+# !!! grepcidr util must be installed!
+BYPASS="192.168.0.0/16, 169.254.169.254" # Also, don't claim for "zeroconf" ip on multiple openstack controller namespaces.
+BYPASS_I=""
+
 [ -f "/etc/ipaddr-check/ipaddr-check.conf" ] && . "/etc/ipaddr-check/ipaddr-check.conf"
 
 umask 027
 mkdir -p "${DIR}"
+mkdir -p "${DIR_NEW}"
 mkdir -p "${DIR_R}"
 chown :zabbix "${DIR}"
 
@@ -46,19 +54,30 @@ while : ; do
 
   iter=$((iter - 1))
   if [ $iter -lt 0 ]; then
-    iter=100
-    find "${DIR_R}" -type f -not -newermt '1 hour ago' -delete
+    iter=33
+    find "${DIR_NEW}" -type f -not -newermt '5 minutes ago' -delete
   fi
 
-  v4=`grep -R ^v4=1 "${DIR_R}" | sort -k 2 | uniq -d -f 1 | awk '{print $2}'` # | grep -v "169.254.169.254"
+  find "${DIR_R}" -type f -delete # 0.005s per 1200 files
+  cd "${DIR_NEW}"
+  cp -Ran . "${DIR_R}/" # 0.015s per 1200 files
+  sleep 0.1
+  cp -Ran . "${DIR_R}/" # I suspect than rename() syscall in ubuntu-14 is not atomic enough. At least, in tmpfs...
+#  find . -type f -exec ln {} "${DIR_R}/" \; // 0.8s per 1200 files!!!
+
+  v4=`grep -R ^v4=1 "${DIR_R}" | sort -s -k 2 | uniq -d -f 1 | awk '{print $2}'` # | grep -v "169.254.169.254"
   if [ ! -z "${v4}" ]; then # Otherwise, read() iterates over empty v4!!!
     while read dup
     do
-      hosts=`grep -Rl "${dup}$" "${DIR_R}" | xargs egrep -h "^(addr|host)=" | cut -d ':' -f 1 | sort`
+      if [ ! -z "${BYPASS}" ] && (echo "${dup}" | grepcidr "${BYPASS}" >/dev/null); then
+        continue
+      fi
+      hosts=`grep -Rl "${dup}$" "${DIR_R}" | xargs egrep -h "^(addr|host)=" | cut -d ':' -f 1 | sort -s`
       a=`echo "$hosts" | uniq | egrep -h "^(addr)="`
       h=`echo "$hosts" | uniq | egrep -h "^(host)="`
       line=`echo "$dup:" $a :: $h`
-      if [ `echo "$hosts" | uniq | egrep -hc "^(addr)="` -gt 1 -o `echo "$hosts" | uniq | egrep -hc "^(host)="` -gt 1 ]; then
+      if [ `echo "$hosts" | uniq | egrep -hc "^(addr)="` -gt 1 ]; then
+# -o `echo "$hosts" | uniq | egrep -hc "^(host)="` -gt 1 ## No, doing so produces false positives on host rename (e.g., during new host tuning).
         # DUP!
         DUP+="$line
 "
@@ -69,6 +88,9 @@ while : ; do
           DUP_C+="$count: $line
 "
         else
+          if [ ! -z "${BYPASS_I}" ] && (echo "${dup}" | grepcidr "${BYPASS_I}" >/dev/null); then
+            continue
+          fi
           DUP_I+="$line
 "
         fi
@@ -83,6 +105,10 @@ while : ; do
   mv "${DIR}/dup.new" "${DIR}/dup"
 
   if [ "${DUP}" != "" ] && [ "${DUP}" != "${DUP_}" ]; then
+    snap="${DIR}/`/bin/date "+%s"`"
+    mkdir -p "${snap}"
+    cd "${DIR_R}"
+    cp -Ran . "${snap}/"
     echo -e "${DUP}" | /usr/bin/mail -s "IP DUP(s) was just detected by \"`hostname -f`\"" "${mail}"
     DUP_="${DUP}"
   fi
@@ -98,12 +124,12 @@ while : ; do
   fi
 
   # Deal with logged changes
-  echo "$DUP_C" | egrep "^[2-9]:" | cut -d ' ' -f 1,3- | sort -u > "${DIR}/dup_c.new"
+  echo "$DUP_C" | egrep "^[2-9]:" | cut -d ' ' -f 1,3- | sort -s -u > "${DIR}/dup_c.new"
   chown :zabbix "${DIR}/dup_c.new"
   mv "${DIR}/dup_c.new" "${DIR}/dup_c"
 
   # Flood/spoofing!
-  echo "$DUP_C" | egrep -v "^([2-9]:|$)" | cut -d ' ' -f 1,3- | sort -u | tail -n -1 > "${DIR}/dup_f.new"
+  echo "$DUP_C" | egrep -v "^([2-9]:|$)" | cut -d ' ' -f 1,3- | sort -s -u | tail -n -1 > "${DIR}/dup_f.new"
   chown :zabbix "${DIR}/dup_f.new"
   mv "${DIR}/dup_f.new" "${DIR}/dup_f"
 
