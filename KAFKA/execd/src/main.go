@@ -407,6 +407,7 @@ func execCommand(c *Command) (*ExecResult) {
 //	fmt.Printf("pid = %d\n", cmd.Process.Pid)
 
 	if c.no_wait {
+		cmd.Process.Release() // Drop PPID to avoid zombies
 		return r
 	}
 
